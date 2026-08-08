@@ -1,0 +1,327 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+}
+
+enum UserRole {
+  USER
+  ADMIN
+}
+
+enum WalletTransactionType {
+  DEPOSIT
+  PURCHASE
+  REFUND
+  ADJUSTMENT
+}
+
+enum WalletTransactionStatus {
+  PENDING
+  COMPLETED
+  FAILED
+}
+
+enum PaymentProvider {
+  PAYSTACK
+  OXAPAY
+}
+
+enum PaymentIntentStatus {
+  PENDING
+  COMPLETED
+  FAILED
+  EXPIRED
+}
+
+enum PricingProfileName {
+  STANDARD
+  COMPETITIVE
+  PREMIUM
+}
+
+enum ProductStatus {
+  DRAFT
+  PUBLISHED
+  ARCHIVED
+}
+
+enum OrderStatus {
+  PENDING_PAYMENT
+  PAID
+  FULFILLING
+  COMPLETED
+  FAILED
+  REFUNDED
+}
+
+enum OrderType {
+  /// Creates a brand-new eSIM (ProviderOrder).
+  PURCHASE
+  /// Adds data/validity to an existing eSIM (targetProviderOrderId).
+  TOPUP
+}
+
+enum ProviderName {
+  ESIM_ACCESS
+}
+
+model User {
+  id        String   @id @default(uuid()) @db.Uuid
+  clerkId   String   @unique
+  email     String
+  role      UserRole @default(USER)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  wallet         Wallet?
+  paymentIntents PaymentIntent[]
+  orders         Order[]
+
+  @@map("users")
+}
+
+model Wallet {
+  id        String   @id @default(uuid()) @db.Uuid
+  userId    String   @unique @db.Uuid
+  balance   Decimal  @default(0) @db.Decimal(18, 4)
+  currency  String   @default("USD")
+  version   Int      @default(0)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  user         User                @relation(fields: [userId], references: [id], onDelete: Cascade)
+  transactions WalletTransaction[]
+
+  @@map("wallets")
+}
+
+model WalletTransaction {
+  id           String                  @id @default(uuid()) @db.Uuid
+  walletId     String                  @db.Uuid
+  type         WalletTransactionType
+  amount       Decimal                 @db.Decimal(18, 4)
+  balanceAfter Decimal                 @db.Decimal(18, 4)
+  reference    String                  @unique
+  status       WalletTransactionStatus @default(COMPLETED)
+  metadata     Json?
+  createdAt    DateTime                @default(now())
+
+  wallet Wallet @relation(fields: [walletId], references: [id], onDelete: Cascade)
+
+  @@index([walletId, createdAt])
+  @@map("wallet_transactions")
+}
+
+model PaymentIntent {
+  id         String              @id @default(uuid()) @db.Uuid
+  userId     String              @db.Uuid
+  provider   PaymentProvider
+  externalId String?
+  amount     Decimal             @db.Decimal(18, 4)
+  currency   String              @default("USD")
+  status     PaymentIntentStatus @default(PENDING)
+  metadata   Json?
+  createdAt  DateTime            @default(now())
+  updatedAt  DateTime            @updatedAt
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([provider, externalId])
+  @@index([userId])
+  @@map("payment_intents")
+}
+
+model PricingProfile {
+  id        String             @id @default(uuid()) @db.Uuid
+  name      PricingProfileName @unique
+  /// Markup rule: { "type": "percent" | "fixed", "value": number }
+  rules     Json
+  createdAt DateTime           @default(now())
+  updatedAt DateTime           @updatedAt
+
+  products      Product[]
+  topUpProducts TopUpProduct[]
+
+  @@map("pricing_profiles")
+}
+
+/// Supported countries/regions from eSIM Access POST /location/list
+model Region {
+  id           String   @id @default(uuid()) @db.Uuid
+  /// ISO / provider location code (e.g. US, JP, or regional code)
+  code         String   @unique
+  /// Display name (e.g. United States, Europe)
+  name         String
+  /// 1 = single country, 2 = multi-country region
+  type         Int
+  /// For type=2: [{ "code": "ES", "name": "Spain" }, ...]
+  subLocations Json?
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  @@index([name])
+  @@map("regions")
+}
+
+model Product {
+  id               String        @id @default(uuid()) @db.Uuid
+  supplierSku      String
+  name             String
+  locationCode     String?
+  dataVolumeBytes  BigInt?
+  durationDays     Int?
+  costPrice        Decimal       @db.Decimal(18, 4)
+  retailPrice      Decimal       @db.Decimal(18, 4)
+  currency         String        @default("USD")
+  status           ProductStatus @default(DRAFT)
+  pricingProfileId String?       @db.Uuid
+  manualOverride   Boolean       @default(false)
+  /// Admin-controlled kill switch — off by default. Even if TopUpProduct rows
+  /// exist and are PUBLISHED, GET /esims/:id/topup-packages returns nothing
+  /// for eSIMs sold under this product while this is false.
+  topUpEnabled     Boolean       @default(false)
+  metadata         Json?
+  createdAt        DateTime      @default(now())
+  updatedAt        DateTime      @updatedAt
+
+  pricingProfile PricingProfile? @relation(fields: [pricingProfileId], references: [id])
+  orders         Order[]
+  topUpProducts  TopUpProduct[]
+
+  @@unique([supplierSku])
+  @@index([status, locationCode])
+  @@map("products")
+}
+
+/// A top-up tier for a specific base Product, admin-curated the same way as
+/// the base catalog: synced from eSIM Access `/package/list` (queried by
+/// `packageCode`, no iccid/eSIM instance required), reviewed, priced, and
+/// published before customers can buy it. Charging still re-validates
+/// eligibility live per-eSIM right before the provider call — this table only
+/// controls *what's offered and at what price*, not final eligibility.
+model TopUpProduct {
+  id               String        @id @default(uuid()) @db.Uuid
+  productId        String        @db.Uuid
+  /// Provider's TOPUP_-prefixed package code, passed to /esim/topup.
+  packageCode      String
+  name             String
+  dataVolumeBytes  BigInt?
+  durationDays     Int?
+  costPrice        Decimal       @db.Decimal(18, 4)
+  retailPrice      Decimal       @db.Decimal(18, 4)
+  currency         String        @default("USD")
+  status           ProductStatus @default(DRAFT)
+  pricingProfileId String?       @db.Uuid
+  manualOverride   Boolean       @default(false)
+  metadata         Json?
+  createdAt        DateTime      @default(now())
+  updatedAt        DateTime      @updatedAt
+
+  product        Product         @relation(fields: [productId], references: [id], onDelete: Cascade)
+  pricingProfile PricingProfile? @relation(fields: [pricingProfileId], references: [id])
+  orders         Order[]
+
+  @@unique([productId, packageCode])
+  @@index([productId, status])
+  @@map("topup_products")
+}
+
+model Order {
+  id                    String      @id @default(uuid()) @db.Uuid
+  userId                String      @db.Uuid
+  orderType             OrderType   @default(PURCHASE)
+  /// Required for PURCHASE, unused (null) for TOPUP — top-up packages aren't
+  /// synced catalog items, their price is computed live at request time.
+  productId             String?     @db.Uuid
+  amount                Decimal     @db.Decimal(18, 4)
+  currency              String      @default("USD")
+  status                OrderStatus @default(PAID)
+  /// Machine-readable reason set when status transitions to FAILED/REFUNDED (e.g. "provider_rejected:200007:...")
+  failureReason         String?
+  /// Set only for TOPUP orders — the existing eSIM (ProviderOrder) being topped up.
+  targetProviderOrderId String?     @db.Uuid
+  /// Set only for TOPUP orders — which curated TopUpProduct SKU was charged, for auditing/reporting.
+  topUpProductId        String?     @db.Uuid
+  createdAt             DateTime    @default(now())
+  updatedAt             DateTime    @updatedAt
+
+  user                User           @relation(fields: [userId], references: [id], onDelete: Cascade)
+  product             Product?       @relation(fields: [productId], references: [id])
+  topUpProduct        TopUpProduct?  @relation(fields: [topUpProductId], references: [id])
+  providerOrder       ProviderOrder? @relation("PurchaseOrder")
+  targetProviderOrder ProviderOrder? @relation("TopUps", fields: [targetProviderOrderId], references: [id])
+
+  @@index([userId, createdAt])
+  /// Powers the stuck-order reconciliation sweep (find orders wedged in FULFILLING).
+  @@index([status, updatedAt])
+  /// Powers top-up history lookups and the "is a top-up already in flight
+  /// for this eSIM" concurrency guard.
+  @@index([targetProviderOrderId, status])
+  @@map("orders")
+}
+
+model ProviderOrder {
+  id               String       @id @default(uuid()) @db.Uuid
+  orderId          String       @unique @db.Uuid
+  provider         ProviderName @default(ESIM_ACCESS)
+  externalOrderId  String?
+  esimTranNo       String?
+  iccid            String?
+  lpaCode          String?
+  qrCodeUrl        String?
+  /// Direct-download link for the QR image (fallback when no camera / for sharing).
+  shortUrl         String?
+  /// Manual APN fallback (rarely needed — most devices auto-configure from the eSIM profile).
+  apn              String?
+  pin              String?
+  puk              String?
+  /// Set once the provider reports the eSIM has been installed on a device.
+  activatedAt      DateTime?
+  /// Cached from the package list (type=TOPUP + iccid lookup). 0/absent = not
+  /// top-uppable; refreshed opportunistically, not authoritative for charging
+  /// — always re-verify live against the provider before accepting a top-up.
+  supportTopUpType Int?
+  status           String?
+  rawResponse      Json?
+  createdAt        DateTime     @default(now())
+  updatedAt        DateTime     @updatedAt
+
+  order  Order      @relation("PurchaseOrder", fields: [orderId], references: [id], onDelete: Cascade)
+  usage  EsimUsage?
+  /// All TOPUP orders that targeted this eSIM — the top-up history, with no
+  /// separate ledger table needed.
+  topUps Order[]    @relation("TopUps")
+
+  @@index([externalOrderId])
+  @@map("provider_orders")
+}
+
+model EsimUsage {
+  id              String    @id @default(uuid()) @db.Uuid
+  providerOrderId String    @unique @db.Uuid
+  dataUsedBytes   BigInt    @default(0)
+  dataTotalBytes  BigInt?
+  expiresAt       DateTime?
+  lastSyncedAt    DateTime  @default(now())
+  createdAt       DateTime  @default(now())
+  updatedAt       DateTime  @updatedAt
+
+  providerOrder ProviderOrder @relation(fields: [providerOrderId], references: [id], onDelete: Cascade)
+
+  @@map("esim_usages")
+}
+
+model WebhookEvent {
+  id          String    @id @default(uuid()) @db.Uuid
+  provider    String
+  eventId     String
+  payload     Json
+  processedAt DateTime?
+  createdAt   DateTime  @default(now())
+
+  @@unique([provider, eventId])
+  @@map("webhook_events")
+}
