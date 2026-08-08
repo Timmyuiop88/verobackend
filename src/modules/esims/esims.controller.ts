@@ -1,9 +1,14 @@
 import { Body, Controller, Get, Param, Post, UseGuards } from '@nestjs/common';
 import {
+  ApiBadRequestResponse,
   ApiBearerAuth,
+  ApiConflictResponse,
   ApiCreatedResponse,
+  ApiForbiddenResponse,
+  ApiNotFoundResponse,
   ApiOkResponse,
   ApiOperation,
+  ApiParam,
   ApiTags,
 } from '@nestjs/swagger';
 import { Throttle } from '@nestjs/throttler';
@@ -39,10 +44,17 @@ export class EsimsController {
   }
 
   @Get(':id')
+  @ApiParam({
+    name: 'id',
+    format: 'uuid',
+    description: 'eSIM id (ProviderOrder id, from GET /esims)',
+  })
   @ApiOperation({
     summary: 'Get one eSIM: status + data balance in a single call',
   })
   @ApiOkResponse({ type: EsimAssetResponseDto })
+  @ApiNotFoundResponse({ description: 'eSIM not found' })
+  @ApiForbiddenResponse({ description: 'eSIM belongs to another user' })
   get(
     @CurrentUser() user: User,
     @Param('id') id: string,
@@ -51,12 +63,24 @@ export class EsimsController {
   }
 
   @Get(':id/topup-packages')
+  @ApiParam({
+    name: 'id',
+    format: 'uuid',
+    description: 'eSIM id (ProviderOrder id, from GET /esims)',
+  })
   @ApiOperation({
     summary: 'List available top-up packages for this eSIM, with pricing',
-    description:
-      'Always live from the provider (never cached) — this is the eligibility check and the exact price POST /esims/:id/topup will charge. An empty array means this eSIM cannot be topped up right now.',
+    description: [
+      'Admin-curated and approved (not a live provider call) — fast DB read of PUBLISHED',
+      'top-up tiers for the product this eSIM was sold under. An empty array means either',
+      'the eSIM is not ready yet, or top-ups are not enabled/published for this plan.',
+      'POST /esims/:id/topup still performs one live provider check right before charging.',
+    ].join('\n'),
   })
   @ApiOkResponse({ type: [TopUpPackageResponseDto] })
+  @ApiNotFoundResponse({ description: 'eSIM not found' })
+  @ApiForbiddenResponse({ description: 'eSIM belongs to another user' })
+  @ApiBadRequestResponse({ description: 'eSIM not ready yet (no iccid)' })
   listTopUpPackages(
     @CurrentUser() user: User,
     @Param('id') id: string,
@@ -65,8 +89,15 @@ export class EsimsController {
   }
 
   @Get(':id/topups')
+  @ApiParam({
+    name: 'id',
+    format: 'uuid',
+    description: 'eSIM id (ProviderOrder id, from GET /esims)',
+  })
   @ApiOperation({ summary: 'Top-up history for this eSIM' })
   @ApiOkResponse({ type: [OrderResponseDto] })
+  @ApiNotFoundResponse({ description: 'eSIM not found' })
+  @ApiForbiddenResponse({ description: 'eSIM belongs to another user' })
   listTopUps(
     @CurrentUser() user: User,
     @Param('id') id: string,
@@ -77,17 +108,32 @@ export class EsimsController {
   @Post(':id/topup')
   // Wallet-debiting endpoint — tighter limit than the global default.
   @Throttle({ default: { limit: 5, ttl: 60_000 } })
+  @ApiParam({
+    name: 'id',
+    format: 'uuid',
+    description: 'eSIM id (ProviderOrder id, from GET /esims)',
+  })
   @ApiOperation({
     summary: 'Top up this eSIM with wallet balance',
     description: [
-      'Send only `packageCode` from GET /esims/:id/topup-packages — the server re-fetches',
-      'live eligibility and price from the provider and never trusts a client-supplied amount.',
+      'Send only `packageCode` from GET /esims/:id/topup-packages — the server charges the',
+      'admin-approved stored price and never trusts a client-supplied amount. One final live',
+      'provider check (by iccid) still runs right before charging as a per-instance eligibility gate.',
       'Returns immediately with the order in FULFILLING status; poll GET /esims/:id or',
       'GET /orders/:id for completion, same as a fresh purchase.',
       'A 409 means a top-up for this eSIM is already in progress — wait for it to resolve first.',
     ].join('\n'),
   })
   @ApiCreatedResponse({ type: OrderResponseDto })
+  @ApiNotFoundResponse({ description: 'eSIM not found' })
+  @ApiForbiddenResponse({ description: 'eSIM belongs to another user' })
+  @ApiBadRequestResponse({
+    description:
+      'eSIM not ready, top-ups not enabled for this product, package not published, or the live per-instance eligibility check failed',
+  })
+  @ApiConflictResponse({
+    description: 'A top-up is already in progress for this eSIM',
+  })
   createTopUp(
     @CurrentUser() user: User,
     @Param('id') id: string,

@@ -10,8 +10,11 @@ import {
 } from '@nestjs/common';
 import {
   ApiBearerAuth,
+  ApiForbiddenResponse,
+  ApiNotFoundResponse,
   ApiOkResponse,
   ApiOperation,
+  ApiParam,
   ApiTags,
 } from '@nestjs/swagger';
 import { randomUUID } from 'crypto';
@@ -37,6 +40,7 @@ import { EsimAccessService } from '../integrations/esim-access/esim-access.servi
 import { OrderResponseDto } from '../orders/dto/order-response.dto';
 import { toOrderResponse } from '../orders/orders.mapper';
 import { OrdersService } from '../orders/orders.service';
+import { WalletTransactionDto } from '../wallet/dto/wallet-response.dto';
 import { WalletService } from '../wallet/wallet.service';
 import {
   EsimWebhookConfigDto,
@@ -50,6 +54,10 @@ import {
 
 @ApiTags('admin')
 @ApiBearerAuth()
+@ApiForbiddenResponse({
+  description:
+    'Admin role required (Clerk publicMetadata.role=admin or org:admin).',
+})
 @UseGuards(ClerkAuthGuard, AdminGuard)
 @Controller('admin')
 export class AdminController {
@@ -105,6 +113,7 @@ export class AdminController {
   }
 
   @Patch('products/:id/status')
+  @ApiParam({ name: 'id', format: 'uuid', description: 'Product id' })
   @ApiOperation({
     summary: 'Publish, unpublish, or archive a product (approval step)',
     description: [
@@ -115,6 +124,7 @@ export class AdminController {
     ].join('\n'),
   })
   @ApiOkResponse({ type: AdminProductResponseDto })
+  @ApiNotFoundResponse({ description: 'Product not found' })
   async setStatus(
     @Param('id') id: string,
     @Body() dto: UpdateProductStatusDto,
@@ -124,6 +134,7 @@ export class AdminController {
   }
 
   @Patch('products/:id/pricing')
+  @ApiParam({ name: 'id', format: 'uuid', description: 'Product id' })
   @ApiOperation({
     summary: 'Set pricing profile or manual retail price (USD)',
     description: [
@@ -133,6 +144,7 @@ export class AdminController {
     ].join('\n'),
   })
   @ApiOkResponse({ type: AdminProductResponseDto })
+  @ApiNotFoundResponse({ description: 'Product not found' })
   async setPricing(
     @Param('id') id: string,
     @Body() dto: UpdateProductPricingDto,
@@ -147,6 +159,7 @@ export class AdminController {
   }
 
   @Post('products/:id/topup-packages/sync')
+  @ApiParam({ name: 'id', format: 'uuid', description: 'Product id' })
   @ApiOperation({
     summary:
       '"Check top-up prices" — fetch this product\'s top-up tiers from the supplier',
@@ -158,15 +171,18 @@ export class AdminController {
     ].join('\n'),
   })
   @ApiOkResponse({ type: TopUpSyncResultDto })
+  @ApiNotFoundResponse({ description: 'Product not found' })
   syncTopUpPackages(@Param('id') id: string): Promise<TopUpSyncResultDto> {
     return this.topUpCatalogService.syncForProduct(id);
   }
 
   @Get('products/:id/topup-packages')
+  @ApiParam({ name: 'id', format: 'uuid', description: 'Product id' })
   @ApiOperation({
     summary: 'Review top-up tiers for a product (DRAFT + PUBLISHED + ARCHIVED)',
   })
   @ApiOkResponse({ type: [TopUpProductResponseDto] })
+  @ApiNotFoundResponse({ description: 'Product not found' })
   async listTopUpPackages(
     @Param('id') id: string,
   ): Promise<TopUpProductResponseDto[]> {
@@ -175,12 +191,14 @@ export class AdminController {
   }
 
   @Patch('products/:id/topup-enabled')
+  @ApiParam({ name: 'id', format: 'uuid', description: 'Product id' })
   @ApiOperation({
     summary: "Turn top-ups on/off for this product's eSIMs",
     description:
       'Kill switch — even with PUBLISHED tiers, GET /esims/:id/topup-packages returns nothing while this is false.',
   })
   @ApiOkResponse({ type: AdminProductResponseDto })
+  @ApiNotFoundResponse({ description: 'Product not found' })
   async setTopUpEnabled(
     @Param('id') id: string,
     @Body() dto: UpdateTopUpEnabledDto,
@@ -193,10 +211,16 @@ export class AdminController {
   }
 
   @Patch('topup-packages/:id/status')
+  @ApiParam({
+    name: 'id',
+    format: 'uuid',
+    description: 'TopUpProduct id (from the sync/list response)',
+  })
   @ApiOperation({
     summary: 'Publish, unpublish, or archive a top-up tier (approval step)',
   })
   @ApiOkResponse({ type: TopUpProductResponseDto })
+  @ApiNotFoundResponse({ description: 'Top-up package not found' })
   async setTopUpPackageStatus(
     @Param('id') id: string,
     @Body() dto: UpdateProductStatusDto,
@@ -206,11 +230,17 @@ export class AdminController {
   }
 
   @Patch('topup-packages/:id/pricing')
+  @ApiParam({
+    name: 'id',
+    format: 'uuid',
+    description: 'TopUpProduct id (from the sync/list response)',
+  })
   @ApiOperation({
     summary:
       'Set pricing profile or manual retail price (USD) for a top-up tier',
   })
   @ApiOkResponse({ type: TopUpProductResponseDto })
+  @ApiNotFoundResponse({ description: 'Top-up package not found' })
   async setTopUpPackagePricing(
     @Param('id') id: string,
     @Body() dto: UpdateProductPricingDto,
@@ -233,8 +263,14 @@ export class AdminController {
   }
 
   @Post('orders/:id/retry-fulfillment')
-  @ApiOperation({ summary: 'Force retry eSIM fulfillment for an order' })
+  @ApiParam({ name: 'id', format: 'uuid', description: 'Order id' })
+  @ApiOperation({
+    summary: 'Force retry eSIM fulfillment for an order',
+    description:
+      'Re-enqueues the fulfillment job for an order stuck in FULFILLING (e.g. after the reconciliation sweep flags it, or for manual support intervention). No-op guard: refuses to retry orders already COMPLETED or REFUNDED.',
+  })
   @ApiOkResponse({ type: OrderResponseDto })
+  @ApiNotFoundResponse({ description: 'Order not found' })
   async retryFulfillment(@Param('id') id: string): Promise<OrderResponseDto> {
     const order = await this.ordersService.retryFulfillment(id);
     return toOrderResponse(order);
@@ -243,9 +279,14 @@ export class AdminController {
   @Post('wallet/adjust')
   @ApiOperation({
     summary: 'Audited wallet adjustment (support)',
-    description: 'Requires Clerk admin role. Creates ADJUSTMENT transaction.',
+    description:
+      'Requires Clerk admin role. Creates an ADJUSTMENT transaction with a signed USD `amount` (positive credits, negative debits) and updates the balance atomically.',
   })
-  async adjustWallet(@Body() dto: WalletAdjustDto) {
+  @ApiOkResponse({ type: WalletTransactionDto })
+  @ApiNotFoundResponse({ description: 'User (or their wallet) not found' })
+  async adjustWallet(
+    @Body() dto: WalletAdjustDto,
+  ): Promise<WalletTransactionDto> {
     const tx = await this.walletService.adjust({
       userId: dto.userId,
       amount: dto.amount,

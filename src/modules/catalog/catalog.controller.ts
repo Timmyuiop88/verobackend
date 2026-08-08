@@ -1,5 +1,11 @@
 import { Controller, Get, Param, Query } from '@nestjs/common';
-import { ApiOkResponse, ApiOperation, ApiTags } from '@nestjs/swagger';
+import {
+  ApiNotFoundResponse,
+  ApiOkResponse,
+  ApiOperation,
+  ApiParam,
+  ApiTags,
+} from '@nestjs/swagger';
 import { buildPaginationMeta } from '../../common/dto/pagination.dto';
 import { CatalogService } from './catalog.service';
 import { toProductResponse } from './catalog.mapper';
@@ -71,12 +77,14 @@ export class CatalogController {
   }
 
   @Get('products/:id')
+  @ApiParam({ name: 'id', format: 'uuid', description: 'Product id' })
   @ApiOperation({
     summary: 'Get a published product by id',
     description:
-      'Prices are USD: `retailPrice` (e.g. `1.80`) and `retailPriceUsd` (e.g. `$1.80`).',
+      'Prices are USD: `retailPrice` (e.g. `1.80`) and `retailPriceUsd` (e.g. `$1.80`). Only returns products with status PUBLISHED — DRAFT/ARCHIVED ids 404 here even if they exist.',
   })
   @ApiOkResponse({ type: ProductResponseDto })
+  @ApiNotFoundResponse({ description: 'Product not found or not published' })
   async get(@Param('id') id: string): Promise<ProductResponseDto> {
     const product = await this.catalogService.getPublishedById(id);
     return toProductResponse(product);

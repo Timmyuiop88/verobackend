@@ -71,10 +71,17 @@ async function bootstrap() {
       'products',
       'Public catalog + regions. Use GET /regions for country autocomplete, GET /products?country=Japan to search.',
     )
-    .addTag('orders')
+    .addTag(
+      'orders',
+      'Purchase products and track fulfillment/usage/install details.',
+    )
+    .addTag(
+      'esims',
+      'Asset-shaped view over purchased eSIMs ("my eSIMs") — status, data balance, and top-ups. Purchases still go through POST /orders; everything after that lives here.',
+    )
     .addTag(
       'admin',
-      'Requires Clerk admin role (publicMetadata.role=admin or org:admin).',
+      'Requires Clerk admin role (publicMetadata.role=admin or org:admin). Catalog sync/pricing/approval, top-up catalog management, order/wallet support tools.',
     )
     .addTag(
       'webhooks',

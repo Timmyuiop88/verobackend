@@ -1,9 +1,13 @@
 import { Body, Controller, Get, Param, Post, UseGuards } from '@nestjs/common';
 import {
+  ApiBadRequestResponse,
   ApiBearerAuth,
   ApiCreatedResponse,
+  ApiForbiddenResponse,
+  ApiNotFoundResponse,
   ApiOkResponse,
   ApiOperation,
+  ApiParam,
   ApiTags,
 } from '@nestjs/swagger';
 import type { User } from '@prisma/client';
@@ -38,8 +42,14 @@ export class OrdersController {
   // Wallet-debiting endpoint — tighter limit than the global default to
   // blunt rapid-fire double-submits/abuse beyond normal usage.
   @Throttle({ default: { limit: 5, ttl: 60_000 } })
-  @ApiOperation({ summary: 'Purchase a published product with wallet balance' })
+  @ApiOperation({
+    summary: 'Purchase a published product with wallet balance',
+    description:
+      'Debits the wallet immediately and enqueues eSIM provisioning. Returns with status PAID/FULFILLING — poll GET /orders/:id (or GET /esims once allocated) for completion.',
+  })
   @ApiCreatedResponse({ type: OrderResponseDto })
+  @ApiBadRequestResponse({ description: 'Insufficient wallet balance' })
+  @ApiNotFoundResponse({ description: 'Published product not found' })
   async create(
     @CurrentUser() user: User,
     @Body() dto: CreateOrderDto,
@@ -76,8 +86,11 @@ export class OrdersController {
   }
 
   @Get(':id')
+  @ApiParam({ name: 'id', format: 'uuid', description: 'Order id' })
   @ApiOperation({ summary: 'Get my order by id' })
   @ApiOkResponse({ type: OrderResponseDto })
+  @ApiNotFoundResponse({ description: 'Order not found' })
+  @ApiForbiddenResponse({ description: 'Order belongs to another user' })
   async get(
     @CurrentUser() user: User,
     @Param('id') id: string,
@@ -87,6 +100,7 @@ export class OrdersController {
   }
 
   @Get(':id/usage')
+  @ApiParam({ name: 'id', format: 'uuid', description: 'Order id' })
   @ApiOperation({
     summary: 'Get eSIM data usage/balance for my order',
     description: [
@@ -96,6 +110,10 @@ export class OrdersController {
     ].join('\n'),
   })
   @ApiOkResponse({ type: OrderUsageResponseDto })
+  @ApiNotFoundResponse({
+    description: 'Order not found, or eSIM not allocated yet',
+  })
+  @ApiForbiddenResponse({ description: 'Order belongs to another user' })
   getUsage(
     @CurrentUser() user: User,
     @Param('id') id: string,
@@ -104,6 +122,7 @@ export class OrdersController {
   }
 
   @Get(':id/install')
+  @ApiParam({ name: 'id', format: 'uuid', description: 'Order id' })
   @ApiOperation({
     summary: 'Get everything needed to install this eSIM on a device',
     description: [
@@ -115,6 +134,10 @@ export class OrdersController {
     ].join('\n'),
   })
   @ApiOkResponse({ type: EsimInstallDetailsResponseDto })
+  @ApiNotFoundResponse({
+    description: 'Order not found, or eSIM not allocated yet',
+  })
+  @ApiForbiddenResponse({ description: 'Order belongs to another user' })
   getInstallDetails(
     @CurrentUser() user: User,
     @Param('id') id: string,
