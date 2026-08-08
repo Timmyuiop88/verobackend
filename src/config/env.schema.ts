@@ -10,6 +10,10 @@ export const envSchema = z.object({
   REDIS_URL: z.string().min(1),
   CLERK_SECRET_KEY: z.string().min(1),
   CLERK_PUBLISHABLE_KEY: z.string().min(1),
+  /** Comma-separated list of allowed frontend origins for Clerk's JWT `azp` check (e.g. https://tradevero.vercel.app). Add every deployed frontend origin here — Clerk rejects tokens from origins not in this list. */
+  CLERK_AUTHORIZED_PARTIES: z
+    .string()
+    .default('http://localhost:3000,http://localhost:3001'),
   PAYSTACK_SECRET_KEY: z.string().min(1),
   PAYSTACK_WEBHOOK_SECRET: z.string().min(1),
   /** Charge currency on Paystack. NG merchants: NGN (default). USD only if enabled on your Paystack account. */

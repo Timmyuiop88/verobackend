@@ -14,18 +14,24 @@ export type ClerkAuthPayload = {
 export class ClerkService {
   private readonly logger = new Logger(ClerkService.name);
   private readonly clerk;
+  private readonly authorizedParties: string[];
 
   constructor(private readonly config: ConfigService<Env, true>) {
     this.clerk = createClerkClient({
       secretKey: this.config.get('CLERK_SECRET_KEY', { infer: true }),
     });
+    this.authorizedParties = this.config
+      .get('CLERK_AUTHORIZED_PARTIES', { infer: true })
+      .split(',')
+      .map((origin) => origin.trim())
+      .filter(Boolean);
   }
 
   async verifyBearerToken(token: string): Promise<ClerkAuthPayload> {
     try {
       const payload = await verifyToken(token, {
         secretKey: this.config.get('CLERK_SECRET_KEY', { infer: true }),
-        authorizedParties: ['http://localhost:3001', 'http://localhost:3000'],
+        authorizedParties: this.authorizedParties,
       });
 
       const clerkId = payload.sub;
