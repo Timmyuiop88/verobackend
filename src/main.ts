@@ -87,6 +87,14 @@ async function bootstrap() {
       'webhooks',
       'Provider callbacks. No Clerk auth — verified via provider signatures.',
     )
+    .addTag(
+      'notifications',
+      'In-app (not push) notification feed — deposits, order completion/failure, top-ups.',
+    )
+    .addTag(
+      'transactions',
+      'Unified feed merging eSIM orders + wallet ledger entries into one timeline for a single "Transactions" screen.',
+    )
     .build();
 
   const document = SwaggerModule.createDocument(app, swaggerConfig);

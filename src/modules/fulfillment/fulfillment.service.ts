@@ -1,6 +1,8 @@
 import { Injectable, Logger } from '@nestjs/common';
+import { EventEmitter2 } from '@nestjs/event-emitter';
 import { OrderStatus, ProviderName, type ProviderOrder } from '@prisma/client';
 import { esimBuyDebug } from '../../common/debug/esim-buy-debug';
+import { DomainEvent } from '../../common/events/domain-events';
 import { opsAlert } from '../../common/observability/ops-alert';
 import { PrismaService } from '../../common/prisma/prisma.service';
 import type {
@@ -24,6 +26,7 @@ export class FulfillmentService {
     private readonly prisma: PrismaService,
     private readonly walletService: WalletService,
     private readonly esimAccess: EsimAccessService,
+    private readonly eventEmitter: EventEmitter2,
   ) {}
 
   /**
@@ -139,6 +142,23 @@ export class FulfillmentService {
       source,
       iccid: profile.iccid,
     });
+
+    const product = order.productId
+      ? await this.prisma.product.findUnique({
+          where: { id: order.productId },
+          select: { name: true },
+        })
+      : null;
+
+    this.eventEmitter.emit(DomainEvent.OrderCompleted, {
+      orderId,
+      userId: order.userId,
+      orderType: order.orderType,
+      amount: order.amount.toString(),
+      currency: order.currency,
+      productName: product?.name ?? null,
+      iccid: profile.iccid,
+    });
   }
 
   /**
@@ -206,6 +226,15 @@ export class FulfillmentService {
       providerOrderId,
       iccid: result.iccid,
     });
+
+    this.eventEmitter.emit(DomainEvent.TopUpCompleted, {
+      orderId: topUpOrderId,
+      userId: order.userId,
+      providerOrderId,
+      amount: order.amount.toString(),
+      currency: order.currency,
+      iccid: result.iccid,
+    });
   }
 
   /**
@@ -250,6 +279,15 @@ export class FulfillmentService {
       orderId,
       reason,
       amount: order.amount.toString(),
+    });
+
+    this.eventEmitter.emit(DomainEvent.OrderFailed, {
+      orderId,
+      userId: order.userId,
+      orderType: order.orderType,
+      amount: order.amount.toString(),
+      currency: order.currency,
+      reason,
     });
   }
 

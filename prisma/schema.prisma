@@ -68,6 +68,17 @@ enum ProviderName {
   ESIM_ACCESS
 }
 
+enum NotificationType {
+  WALLET_DEPOSIT
+  WALLET_REFUND
+  WALLET_ADJUSTMENT
+  ORDER_COMPLETED
+  ORDER_FAILED
+  TOPUP_COMPLETED
+  TOPUP_FAILED
+  GENERIC
+}
+
 model User {
   id        String   @id @default(uuid()) @db.Uuid
   clerkId   String   @unique
@@ -77,10 +88,56 @@ model User {
   updatedAt DateTime @updatedAt
 
   wallet         Wallet?
+  profile        UserProfile?
   paymentIntents PaymentIntent[]
   orders         Order[]
+  notifications  Notification[]
 
   @@map("users")
+}
+
+/// In-app (not push) notification feed — "events" like deposits, order
+/// completion/failure, and top-ups surface here. Each notification also
+/// fans out to an email via the same event, independently of this row.
+model Notification {
+  id        String           @id @default(uuid()) @db.Uuid
+  userId    String           @db.Uuid
+  type      NotificationType
+  title     String
+  message   String
+  /// Structured extra context for deep-linking (e.g. { "orderId": "..." }).
+  data      Json?
+  readAt    DateTime?
+  createdAt DateTime         @default(now())
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId, createdAt])
+  @@index([userId, readAt])
+  @@map("notifications")
+}
+
+/// Custom profile data owned entirely by TradeVero — deliberately kept out of
+/// Clerk metadata so it stays put (and queryable/joinable) if we ever swap
+/// auth providers. Clerk continues to own identity (email, login) only.
+model UserProfile {
+  id          String    @id @default(uuid()) @db.Uuid
+  userId      String    @unique @db.Uuid
+  displayName String?
+  phone       String?
+  country     String?
+  avatarUrl   String?
+  dateOfBirth DateTime?
+  /// Structured, known-shape settings (notifications, language, currency display, etc.)
+  preferences Json?
+  /// Open-ended bucket for future fields that don't warrant a migration yet.
+  metadata    Json?
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @updatedAt
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@map("user_profiles")
 }
 
 model Wallet {
