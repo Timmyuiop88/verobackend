@@ -183,14 +183,25 @@ export class EmailService implements OnModuleInit {
     to: string;
     amount: string;
     reasonText: string;
-    kind: 'PURCHASE' | 'TOPUP' | 'GIFT_CARD';
+    kind:
+      | 'PURCHASE'
+      | 'TOPUP'
+      | 'GIFT_CARD'
+      | 'SMS_ONE_TIME'
+      | 'NUMBER_RENTAL'
+      | 'NUMBER_RENTAL_EXTEND';
   }): Promise<void> {
     const subject =
       params.kind === 'TOPUP'
         ? 'Your top-up could not be completed — refunded'
         : params.kind === 'GIFT_CARD'
           ? 'Your gift card purchase could not be completed — refunded'
-          : 'Your eSIM purchase could not be completed — refunded';
+          : params.kind === 'SMS_ONE_TIME'
+            ? 'Your SMS verification could not be completed — refunded'
+            : params.kind === 'NUMBER_RENTAL' ||
+                params.kind === 'NUMBER_RENTAL_EXTEND'
+              ? 'Your number rental could not be completed — refunded'
+              : 'Your eSIM purchase could not be completed — refunded';
     const html = renderEmailLayout({
       heading: 'Order refunded',
       bodyHtml: [

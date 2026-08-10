@@ -20,6 +20,8 @@ import type {
   ReloadlyTransaction,
   ReloadlyTransactionStatus,
 } from '../integrations/reloadly/reloadly.types';
+import { SmsPoolService } from '../integrations/smspool/smspool.service';
+import { SmsFulfillmentService } from '../sms/sms-fulfillment.service';
 import { WalletService } from '../wallet/wallet.service';
 
 type ReloadlyWebhookPayload = {
@@ -44,9 +46,11 @@ export class WebhooksService {
     private readonly oxapay: OxapayService,
     private readonly esimAccess: EsimAccessService,
     private readonly reloadly: ReloadlyService,
+    private readonly smspool: SmsPoolService,
     private readonly walletService: WalletService,
     private readonly fulfillmentService: FulfillmentService,
     private readonly giftCardFulfillment: GiftCardFulfillmentService,
+    private readonly smsFulfillment: SmsFulfillmentService,
   ) {}
 
   private eventId(provider: string, raw: string): string {
@@ -548,6 +552,74 @@ export class WebhooksService {
     }
 
     await this.markProcessed('reloadly', eventId);
+    return { received: true };
+  }
+
+  /**
+   * SMSPool dashboard webhook. Discriminate by payload shape:
+   * - `orderid` + sms → one-time verification code
+   * - `rental_code` + `full_sms` → rental inbox
+   * - `rental_code` + `success` (no sms) → auto-extend status
+   */
+  async handleSmsPool(
+    rawBody: string,
+    secretHeader?: string,
+  ): Promise<{ received: true }> {
+    if (!this.smspool.verifyWebhookSecret(secretHeader)) {
+      throw new BadRequestException('Invalid SMSPool webhook secret');
+    }
+
+    const payload = JSON.parse(rawBody) as {
+      orderid?: string;
+      sms?: string;
+      full_sms?: string;
+      rental_code?: string;
+      phonenumber?: string;
+      success?: number | boolean;
+      timestamp?: string;
+    };
+
+    const eventId = this.eventId(
+      'smspool',
+      [
+        payload.orderid ?? '',
+        payload.rental_code ?? '',
+        payload.full_sms ?? payload.sms ?? '',
+        String(payload.success ?? ''),
+        payload.timestamp ?? '',
+        rawBody,
+      ].join(':'),
+    );
+
+    const shouldProcess = await this.beginEvent('smspool', eventId, payload);
+    if (!shouldProcess) {
+      return { received: true };
+    }
+
+    if (payload.orderid && (payload.full_sms || payload.sms)) {
+      await this.smsFulfillment.completeVerificationFromSms({
+        providerOrderId: payload.orderid,
+        fullSms: payload.full_sms ?? String(payload.sms),
+        smsCode: payload.sms ? String(payload.sms) : null,
+      });
+    } else if (payload.rental_code && (payload.full_sms || payload.sms)) {
+      await this.smsFulfillment.appendRentalMessage({
+        rentalCode: payload.rental_code,
+        fullSms: payload.full_sms ?? String(payload.sms),
+        receivedAt: payload.timestamp
+          ? new Date(payload.timestamp)
+          : undefined,
+      });
+    } else if (payload.rental_code && payload.success !== undefined) {
+      await this.smsFulfillment.applyAutoExtendWebhook({
+        rentalCode: payload.rental_code,
+        success: payload.success === 1 || payload.success === true,
+      });
+    } else {
+      this.logger.warn(`Unrecognized SMSPool webhook payload keys`);
+    }
+
+    await this.markProcessed('smspool', eventId);
     return { received: true };
   }
 

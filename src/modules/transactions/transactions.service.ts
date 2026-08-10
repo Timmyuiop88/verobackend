@@ -20,6 +20,8 @@ const ORDER_CATEGORIES: TransactionCategory[] = [
   TransactionCategory.ESIM_PURCHASE,
   TransactionCategory.ESIM_TOPUP,
   TransactionCategory.GIFT_CARD_PURCHASE,
+  TransactionCategory.SMS_ONE_TIME,
+  TransactionCategory.NUMBER_RENTAL,
 ];
 const WALLET_CATEGORIES: TransactionCategory[] = [
   TransactionCategory.WALLET_DEPOSIT,
@@ -77,6 +79,10 @@ export class TransactionsService {
               providerOrder: true,
               giftCardDenomination: { include: { product: true } },
               giftCardIssuance: true,
+              smsOneTimeOffer: { include: { service: true, country: true } },
+              smsVerification: true,
+              numberRentalPlan: { include: { rentalSku: true } },
+              numberRental: true,
             },
           })
         : Promise.resolve<OrderForFeed[]>([]),

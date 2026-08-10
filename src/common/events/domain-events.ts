@@ -12,10 +12,13 @@ import type { OrderType, WalletTransactionType } from '@prisma/client';
 export const DomainEvent = {
   WalletCredited: 'wallet.credited',
   OrderCompleted: 'order.completed',
-  /** Covers PURCHASE, TOPUP and GIFT_CARD orders — check `orderType` on the payload. */
+  /** Covers PURCHASE, TOPUP, GIFT_CARD and SMS orders — check `orderType` on the payload. */
   OrderFailed: 'order.failed',
   TopUpCompleted: 'topup.completed',
   GiftCardIssued: 'giftcard.issued',
+  SmsCodeReceived: 'sms.code_received',
+  RentalReady: 'sms.rental_ready',
+  RentalSmsReceived: 'sms.rental_sms_received',
 } as const;
 
 export interface WalletCreditedPayload {
@@ -70,4 +73,28 @@ export interface GiftCardIssuedPayload {
   productName: string;
   faceValue: string;
   cardCount: number;
+}
+
+export interface SmsCodeReceivedPayload {
+  orderId: string;
+  userId: string;
+  phoneNumber: string | null;
+  smsCode: string | null;
+}
+
+export interface RentalReadyPayload {
+  orderId: string;
+  userId: string;
+  rentalId: string;
+  phoneNumber: string | null;
+  expiresAt: string | null;
+}
+
+export interface RentalSmsReceivedPayload {
+  orderId: string;
+  userId: string;
+  rentalId: string;
+  phoneNumber: string | null;
+  fullSms: string;
+  smsCode: string | null;
 }

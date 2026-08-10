@@ -10,11 +10,6 @@ export function slugify(value: string): string {
   );
 }
 
-/**
- * Slugs are unique in the DB, and Reloadly happily ships several products
- * with the same name (different countries, same brand), so the external id
- * is always appended rather than only on collision.
- */
 export function externalSlug(name: string, externalId: number): string {
   return `${slugify(name)}-${externalId}`;
 }
@@ -27,11 +22,6 @@ export function chunk<T>(items: T[], size: number): T[][] {
   return out;
 }
 
-/**
- * Run independent async work in parallel chunks without a Prisma interactive
- * transaction. Prefer this for idempotent catalog upserts — each statement is
- * already atomic, and a retry can finish whatever a prior run left half-done.
- */
 export async function mapInChunks<T, R>(
   items: T[],
   size: number,
@@ -42,4 +32,17 @@ export async function mapInChunks<T, R>(
     out.push(...(await Promise.all(batch.map(fn))));
   }
   return out;
+}
+
+/** Best-effort extraction of a short OTP from an SMS body. */
+export function extractSmsCode(fullSms: string): string | null {
+  const patterns = [
+    /\b(\d{4,8})\b/,
+    /\b([A-Z0-9]{4,8})\b/i,
+  ];
+  for (const pattern of patterns) {
+    const match = fullSms.match(pattern);
+    if (match?.[1]) return match[1];
+  }
+  return null;
 }

@@ -22,8 +22,12 @@ export function giftCardPollDelayMs(nextAttempt: number): number {
   );
 }
 
-/** Statements per `$transaction` batch when writing synced rows. */
-export const SYNC_WRITE_BATCH_SIZE = 250;
+/**
+ * Concurrent upserts per wave. No interactive `$transaction` — catalog sync
+ * is idempotent, so we parallelize independent writes and cap concurrency to
+ * avoid saturating the Prisma/Postgres connection pool on Render.
+ */
+export const SYNC_WRITE_BATCH_SIZE = 50;
 
 /** Reveal endpoint budget — card codes are bearer secrets. */
 export const GIFTCARD_REVEAL_RATE_LIMIT = 10;

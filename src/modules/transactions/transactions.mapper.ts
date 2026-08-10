@@ -2,9 +2,16 @@ import type {
   GiftCardDenomination,
   GiftCardIssuance,
   GiftCardProduct,
+  NumberRental,
   Order,
   Product,
   ProviderOrder,
+  SmsCountry,
+  SmsOneTimeOffer,
+  SmsRentalPlan,
+  SmsRentalSku,
+  SmsService,
+  SmsVerification,
   TopUpProduct,
   WalletTransaction,
   WalletTransactionType,
@@ -24,6 +31,14 @@ export type OrderForFeed = Order & {
   giftCardDenomination:
     (GiftCardDenomination & { product: GiftCardProduct }) | null;
   giftCardIssuance: GiftCardIssuance | null;
+  smsOneTimeOffer:
+    | (SmsOneTimeOffer & { service: SmsService; country: SmsCountry })
+    | null;
+  smsVerification: SmsVerification | null;
+  numberRentalPlan:
+    | (SmsRentalPlan & { rentalSku: SmsRentalSku })
+    | null;
+  numberRental: NumberRental | null;
 };
 
 function normalizeOrderStatus(status: string): TransactionFeedStatus {
@@ -59,9 +74,62 @@ function toGiftCardFeedItem(order: OrderForFeed): TransactionFeedItemDto {
     meta: {
       orderId: order.id,
       giftCardDenominationId: order.giftCardDenominationId,
-      // Lets the UI deep-link straight to the reveal action, without ever
-      // carrying the code itself through the feed.
       codeAvailable: (order.giftCardIssuance?.cardCount ?? 0) > 0,
+      failureReason: order.failureReason,
+    },
+  };
+}
+
+function toSmsOneTimeFeedItem(order: OrderForFeed): TransactionFeedItemDto {
+  const offer = order.smsOneTimeOffer;
+  return {
+    id: `order:${order.id}`,
+    category: TransactionCategory.SMS_ONE_TIME,
+    direction: TransactionDirection.DEBIT,
+    title: offer
+      ? `${offer.service.name} · ${offer.country.code}`
+      : 'SMS verification',
+    subtitle: order.smsVerification?.phoneNumber ?? null,
+    amount: order.amount.toString(),
+    amountDisplay: `-${formatUsd(order.amount)}`,
+    currency: order.currency,
+    status: normalizeOrderStatus(order.status),
+    rawStatus: order.status,
+    reference: order.id,
+    date: order.createdAt,
+    meta: {
+      orderId: order.id,
+      smsCodeAvailable: Boolean(order.smsVerification?.smsCode),
+      failureReason: order.failureReason,
+    },
+  };
+}
+
+function toRentalFeedItem(order: OrderForFeed): TransactionFeedItemDto {
+  const sku = order.numberRentalPlan?.rentalSku;
+  const isExtend = order.orderType === 'NUMBER_RENTAL_EXTEND';
+  return {
+    id: `order:${order.id}`,
+    category: TransactionCategory.NUMBER_RENTAL,
+    direction: TransactionDirection.DEBIT,
+    title: isExtend
+      ? `Extend · ${sku?.name ?? 'Number rental'}`
+      : (sku?.name ?? 'Number rental'),
+    subtitle: order.numberRental?.phoneNumber
+      ? `${order.numberRental.phoneNumber} · ${order.numberRental.days}d`
+      : order.numberRentalPlan
+        ? `${order.numberRentalPlan.days} days`
+        : null,
+    amount: order.amount.toString(),
+    amountDisplay: `-${formatUsd(order.amount)}`,
+    currency: order.currency,
+    status: normalizeOrderStatus(order.status),
+    rawStatus: order.status,
+    reference: order.id,
+    date: order.createdAt,
+    meta: {
+      orderId: order.id,
+      numberRentalId: order.numberRental?.id ?? order.targetNumberRentalId,
       failureReason: order.failureReason,
     },
   };
@@ -72,6 +140,15 @@ export function toTransactionFeedItemFromOrder(
 ): TransactionFeedItemDto {
   if (order.orderType === 'GIFT_CARD') {
     return toGiftCardFeedItem(order);
+  }
+  if (order.orderType === 'SMS_ONE_TIME') {
+    return toSmsOneTimeFeedItem(order);
+  }
+  if (
+    order.orderType === 'NUMBER_RENTAL' ||
+    order.orderType === 'NUMBER_RENTAL_EXTEND'
+  ) {
+    return toRentalFeedItem(order);
   }
 
   const isTopUp = order.orderType === 'TOPUP';

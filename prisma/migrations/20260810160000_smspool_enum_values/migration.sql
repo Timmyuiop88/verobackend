@@ -1,0 +1,14 @@
+-- Enum additions for SMSPool. Must commit before tables that default to SMSPOOL.
+
+ALTER TYPE "OrderType" ADD VALUE 'SMS_ONE_TIME';
+ALTER TYPE "OrderType" ADD VALUE 'NUMBER_RENTAL';
+ALTER TYPE "OrderType" ADD VALUE 'NUMBER_RENTAL_EXTEND';
+
+ALTER TYPE "ProviderName" ADD VALUE 'SMSPOOL';
+
+ALTER TYPE "NotificationType" ADD VALUE 'SMS_CODE_RECEIVED';
+ALTER TYPE "NotificationType" ADD VALUE 'SMS_ORDER_FAILED';
+ALTER TYPE "NotificationType" ADD VALUE 'RENTAL_READY';
+ALTER TYPE "NotificationType" ADD VALUE 'RENTAL_SMS_RECEIVED';
+ALTER TYPE "NotificationType" ADD VALUE 'RENTAL_EXPIRED';
+ALTER TYPE "NotificationType" ADD VALUE 'RENTAL_FAILED';

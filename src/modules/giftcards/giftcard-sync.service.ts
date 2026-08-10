@@ -18,7 +18,7 @@ import type { ReloadlyProduct } from '../integrations/reloadly/reloadly.types';
 import { normalizeRecipientToSenderMap } from '../integrations/reloadly/reloadly.types';
 import { GiftCardPricingService } from './giftcard-pricing.service';
 import { SYNC_WRITE_BATCH_SIZE } from './giftcards.constants';
-import { chunk, externalSlug, slugify } from './giftcards.util';
+import { chunk, externalSlug, mapInChunks, slugify } from './giftcards.util';
 
 type SyncTally = {
   countriesSynced: number;
@@ -163,26 +163,22 @@ export class GiftCardSyncService {
   private async syncCountries(): Promise<number> {
     const countries = await this.reloadly.listCountries();
 
-    for (const batch of chunk(countries, SYNC_WRITE_BATCH_SIZE)) {
-      await this.prisma.$transaction(
-        batch.map((country) => {
-          const values = {
-            name: country.name,
-            continent: country.continent ?? null,
-            currencyCode: country.currencyCode ?? null,
-            currencyName: country.currencyName ?? null,
-            currencySymbol: country.currencySymbol ?? null,
-            flagUrl: country.flag ?? null,
-            callingCodes: (country.callingCodes ?? []) as Prisma.InputJsonValue,
-          };
-          return this.prisma.giftCardCountry.upsert({
-            where: { code: country.isoName },
-            create: { code: country.isoName, ...values },
-            update: values,
-          });
-        }),
-      );
-    }
+    await mapInChunks(countries, SYNC_WRITE_BATCH_SIZE, (country) => {
+      const values = {
+        name: country.name,
+        continent: country.continent ?? null,
+        currencyCode: country.currencyCode ?? null,
+        currencyName: country.currencyName ?? null,
+        currencySymbol: country.currencySymbol ?? null,
+        flagUrl: country.flag ?? null,
+        callingCodes: (country.callingCodes ?? []) as Prisma.InputJsonValue,
+      };
+      return this.prisma.giftCardCountry.upsert({
+        where: { code: country.isoName },
+        create: { code: country.isoName, ...values },
+        update: values,
+      });
+    });
 
     return countries.length;
   }
@@ -190,20 +186,18 @@ export class GiftCardSyncService {
   private async syncCategories(): Promise<number> {
     const categories = await this.reloadly.listCategories();
 
-    await this.prisma.$transaction(
-      categories.map((category) =>
-        this.prisma.giftCardCategory.upsert({
-          where: { externalId: category.id },
-          create: {
-            externalId: category.id,
-            name: category.name,
-            slug: slugify(category.name),
-          },
-          // `slug` is intentionally not updated — it may already be used in
-          // public URLs, and Reloadly renames categories occasionally.
-          update: { name: category.name },
-        }),
-      ),
+    await mapInChunks(categories, SYNC_WRITE_BATCH_SIZE, (category) =>
+      this.prisma.giftCardCategory.upsert({
+        where: { externalId: category.id },
+        create: {
+          externalId: category.id,
+          name: category.name,
+          slug: slugify(category.name),
+        },
+        // `slug` is intentionally not updated — it may already be used in
+        // public URLs, and Reloadly renames categories occasionally.
+        update: { name: category.name },
+      }),
     );
 
     return categories.length;
@@ -322,93 +316,85 @@ export class GiftCardSyncService {
       existing.map((product) => [product.externalProductId, product]),
     );
 
-    for (const batch of chunk(products, SYNC_WRITE_BATCH_SIZE)) {
-      await this.prisma.$transaction(
-        batch.map((product) => {
-          const prior = existingByExternalId.get(product.productId);
-          const isActive =
-            (product.status ?? 'ACTIVE').toUpperCase() === 'ACTIVE';
+    await mapInChunks(products, SYNC_WRITE_BATCH_SIZE, (product) => {
+      const prior = existingByExternalId.get(product.productId);
+      const isActive = (product.status ?? 'ACTIVE').toUpperCase() === 'ACTIVE';
 
-          const shared = {
-            name: product.productName,
-            brandId: product.brand
-              ? (brandIds.get(product.brand.brandId) ?? null)
-              : null,
-            categoryId: product.category
-              ? (categoryIds.get(product.category.id) ?? null)
-              : null,
-            countryCode: product.country?.isoName ?? null,
-            global: product.global ?? false,
-            providerStatus: product.status ?? null,
-            denominationType:
-              product.denominationType === 'RANGE'
-                ? GiftCardDenominationType.RANGE
-                : GiftCardDenominationType.FIXED,
-            recipientCurrencyCode: product.recipientCurrencyCode ?? 'USD',
-            senderCurrencyCode: product.senderCurrencyCode ?? 'USD',
-            exchangeRate: new Prisma.Decimal(
-              product.recipientCurrencyToSenderCurrencyExchangeRate ?? 1,
-            ),
-            senderFeePercentage: new Prisma.Decimal(
-              product.senderFeePercentage ?? 0,
-            ),
-            senderFeeFixed: new Prisma.Decimal(
-              product.senderFeePercentage ? 0 : (product.senderFee ?? 0),
-            ),
-            discountPercentage: new Prisma.Decimal(
-              product.discountPercentage ?? 0,
-            ),
-            supportsPreOrder: product.supportsPreOrder ?? false,
-            userIdRequired:
-              product.additionalRequirements?.userIdRequired ?? false,
-            logoUrls: (product.logoUrls ?? []) as Prisma.InputJsonValue,
-            redeemInstructionConcise:
-              product.redeemInstruction?.concise ?? null,
-            redeemInstructionVerbose:
-              product.redeemInstruction?.verbose ?? null,
-            minRecipientDenomination: this.optionalDecimal(
-              product.minRecipientDenomination,
-            ),
-            maxRecipientDenomination: this.optionalDecimal(
-              product.maxRecipientDenomination ??
-                product.maxrecipientDenomination,
-            ),
-            minSenderDenomination: this.optionalDecimal(
-              product.minSenderDenomination,
-            ),
-            maxSenderDenomination: this.optionalDecimal(
-              product.maxSenderDenomination,
-            ),
-            lastSeenAt: runStartedAt,
-          };
+      const shared = {
+        name: product.productName,
+        brandId: product.brand
+          ? (brandIds.get(product.brand.brandId) ?? null)
+          : null,
+        categoryId: product.category
+          ? (categoryIds.get(product.category.id) ?? null)
+          : null,
+        countryCode: product.country?.isoName ?? null,
+        global: product.global ?? false,
+        providerStatus: product.status ?? null,
+        denominationType:
+          product.denominationType === 'RANGE'
+            ? GiftCardDenominationType.RANGE
+            : GiftCardDenominationType.FIXED,
+        recipientCurrencyCode: product.recipientCurrencyCode ?? 'USD',
+        senderCurrencyCode: product.senderCurrencyCode ?? 'USD',
+        exchangeRate: new Prisma.Decimal(
+          product.recipientCurrencyToSenderCurrencyExchangeRate ?? 1,
+        ),
+        senderFeePercentage: new Prisma.Decimal(
+          product.senderFeePercentage ?? 0,
+        ),
+        senderFeeFixed: new Prisma.Decimal(
+          product.senderFeePercentage ? 0 : (product.senderFee ?? 0),
+        ),
+        discountPercentage: new Prisma.Decimal(
+          product.discountPercentage ?? 0,
+        ),
+        supportsPreOrder: product.supportsPreOrder ?? false,
+        userIdRequired:
+          product.additionalRequirements?.userIdRequired ?? false,
+        logoUrls: (product.logoUrls ?? []) as Prisma.InputJsonValue,
+        redeemInstructionConcise: product.redeemInstruction?.concise ?? null,
+        redeemInstructionVerbose: product.redeemInstruction?.verbose ?? null,
+        minRecipientDenomination: this.optionalDecimal(
+          product.minRecipientDenomination,
+        ),
+        maxRecipientDenomination: this.optionalDecimal(
+          product.maxRecipientDenomination ?? product.maxrecipientDenomination,
+        ),
+        minSenderDenomination: this.optionalDecimal(
+          product.minSenderDenomination,
+        ),
+        maxSenderDenomination: this.optionalDecimal(
+          product.maxSenderDenomination,
+        ),
+        lastSeenAt: runStartedAt,
+      };
 
-          if (prior) {
-            tally.productsUpdated += 1;
-          } else {
-            tally.productsCreated += 1;
-          }
+      if (prior) {
+        tally.productsUpdated += 1;
+      } else {
+        tally.productsCreated += 1;
+      }
 
-          return this.prisma.giftCardProduct.upsert({
-            where: { externalProductId: product.productId },
-            create: {
-              externalProductId: product.productId,
-              slug: externalSlug(product.productName, product.productId),
-              status: ProductStatus.DRAFT,
-              ...shared,
-            },
-            update: {
-              ...shared,
-              // Our curation state is preserved across syncs, except that a
-              // product Reloadly has deactivated is pulled from sale
-              // immediately — orders against it would fail anyway.
-              ...(isActive || prior?.status !== ProductStatus.PUBLISHED
-                ? {}
-                : { status: ProductStatus.DRAFT }),
-            },
-          });
-        }),
-      );
-    }
+      return this.prisma.giftCardProduct.upsert({
+        where: { externalProductId: product.productId },
+        create: {
+          externalProductId: product.productId,
+          slug: externalSlug(product.productName, product.productId),
+          status: ProductStatus.DRAFT,
+          ...shared,
+        },
+        update: {
+          ...shared,
+          // Our curation state is preserved across syncs, except that a
+          // product Reloadly has deactivated is pulled from sale
+          // immediately — orders against it would fail anyway.
+          ...(isActive || prior?.status !== ProductStatus.PUBLISHED
+            ? {}
+            : { status: ProductStatus.DRAFT }),
+        },
+      });
+    });
 
     tally.productsSynced += products.length;
     await this.syncDenominations(products, { runStartedAt, rules, tally });
@@ -433,29 +419,25 @@ export class GiftCardSyncService {
     }
 
     const brands = [...unseen.values()];
-    for (const batch of chunk(brands, SYNC_WRITE_BATCH_SIZE)) {
-      const saved = await this.prisma.$transaction(
-        batch.map((brand) =>
-          this.prisma.giftCardBrand.upsert({
-            where: { externalId: brand.brandId },
-            create: {
-              externalId: brand.brandId,
-              name: brand.brandName,
-              slug: externalSlug(brand.brandName, brand.brandId),
-              logoUrl: brand.logoUrl ?? null,
-            },
-            update: {
-              name: brand.brandName,
-              ...(brand.logoUrl ? { logoUrl: brand.logoUrl } : {}),
-            },
-          }),
-        ),
-      );
-      for (const brand of saved) {
-        brandIds.set(brand.externalId, brand.id);
-      }
-      tally.brandsSynced += saved.length;
+    const saved = await mapInChunks(brands, SYNC_WRITE_BATCH_SIZE, (brand) =>
+      this.prisma.giftCardBrand.upsert({
+        where: { externalId: brand.brandId },
+        create: {
+          externalId: brand.brandId,
+          name: brand.brandName,
+          slug: externalSlug(brand.brandName, brand.brandId),
+          logoUrl: brand.logoUrl ?? null,
+        },
+        update: {
+          name: brand.brandName,
+          ...(brand.logoUrl ? { logoUrl: brand.logoUrl } : {}),
+        },
+      }),
+    );
+    for (const brand of saved) {
+      brandIds.set(brand.externalId, brand.id);
     }
+    tally.brandsSynced += saved.length;
   }
 
   // ---------------------------------------------------------------------
@@ -602,7 +584,7 @@ export class GiftCardSyncService {
     }
 
     for (const batch of chunk(writes, SYNC_WRITE_BATCH_SIZE)) {
-      await this.prisma.$transaction(batch);
+      await Promise.all(batch);
     }
 
     // Denominations the provider stopped offering for a product we did see
@@ -723,6 +705,8 @@ export class GiftCardSyncService {
     const staleIds = staleProducts.map((product) => product.id);
 
     for (const batch of chunk(staleIds, 500)) {
+      // Two statements, short-lived — keep atomic so dens aren't orphaned
+      // as "still sellable" under an archived product for a sync beat.
       await this.prisma.$transaction([
         this.prisma.giftCardDenomination.updateMany({
           where: { productId: { in: batch } },
@@ -931,7 +915,7 @@ export class GiftCardSyncService {
     }
 
     for (const batch of chunk(writes, SYNC_WRITE_BATCH_SIZE)) {
-      await this.prisma.$transaction(batch);
+      await Promise.all(batch);
     }
 
     return { repriced, demoted };

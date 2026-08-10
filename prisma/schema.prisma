@@ -64,11 +64,18 @@ enum OrderType {
   TOPUP
   /// Buys a gift card denomination from Reloadly (GiftCardIssuance).
   GIFT_CARD
+  /// One-time SMS verification number from SMSPool (SmsVerification).
+  SMS_ONE_TIME
+  /// Multi-day rented number from SMSPool (NumberRental).
+  NUMBER_RENTAL
+  /// Extends an existing NumberRental by N days.
+  NUMBER_RENTAL_EXTEND
 }
 
 enum ProviderName {
   ESIM_ACCESS
   RELOADLY
+  SMSPOOL
 }
 
 enum NotificationType {
@@ -82,6 +89,44 @@ enum NotificationType {
   GENERIC
   GIFT_CARD_READY
   GIFT_CARD_FAILED
+  SMS_CODE_RECEIVED
+  SMS_ORDER_FAILED
+  RENTAL_READY
+  RENTAL_SMS_RECEIVED
+  RENTAL_EXPIRED
+  RENTAL_FAILED
+}
+
+enum SmsPricingScope {
+  GLOBAL
+  COUNTRY
+  SERVICE
+  RENTAL_SKU
+}
+
+enum SmsVerificationStatus {
+  PENDING
+  AWAITING_SMS
+  COMPLETED
+  CANCELLED
+  EXPIRED
+  REFUNDED
+  FAILED
+}
+
+enum NumberRentalStatus {
+  PENDING
+  PENDING_ACTIVATION
+  ACTIVE
+  EXPIRED
+  REFUNDED
+  FAILED
+}
+
+enum SmsSyncStatus {
+  RUNNING
+  COMPLETED
+  FAILED
 }
 
 enum GiftCardDenominationType {
@@ -343,6 +388,12 @@ model Order {
   topUpProductId         String?     @db.Uuid
   /// Set only for GIFT_CARD orders — the exact denomination SKU that was sold.
   giftCardDenominationId String?     @db.Uuid
+  /// Set only for SMS_ONE_TIME orders.
+  smsOneTimeOfferId      String?     @db.Uuid
+  /// Set for NUMBER_RENTAL (and optionally NUMBER_RENTAL_EXTEND) orders.
+  numberRentalPlanId     String?     @db.Uuid
+  /// Set only for NUMBER_RENTAL_EXTEND — the rental being extended.
+  targetNumberRentalId   String?     @db.Uuid
   createdAt              DateTime    @default(now())
   updatedAt              DateTime    @updatedAt
 
@@ -355,12 +406,19 @@ model Order {
   giftCardDenomination GiftCardDenomination? @relation(fields: [giftCardDenominationId], references: [id])
   giftCardIssuance     GiftCardIssuance?
 
+  smsOneTimeOffer    SmsOneTimeOffer? @relation(fields: [smsOneTimeOfferId], references: [id])
+  smsVerification    SmsVerification?
+  numberRentalPlan   SmsRentalPlan?   @relation(fields: [numberRentalPlanId], references: [id])
+  numberRental       NumberRental?    @relation("RentalPurchase")
+  targetNumberRental NumberRental?    @relation("RentalExtends", fields: [targetNumberRentalId], references: [id])
+
   @@index([userId, createdAt])
   /// Powers the stuck-order reconciliation sweep (find orders wedged in FULFILLING).
   @@index([status, updatedAt])
   /// Powers top-up history lookups and the "is a top-up already in flight
   /// for this eSIM" concurrency guard.
   @@index([targetProviderOrderId, status])
+  @@index([targetNumberRentalId, status])
   @@map("orders")
 }
 
@@ -702,6 +760,250 @@ model GiftCardSyncRun {
 
   @@index([startedAt])
   @@map("gift_card_sync_runs")
+}
+
+/// SMSPool country — separate from eSIM Region and GiftCardCountry.
+model SmsCountry {
+  id         String   @id @default(uuid()) @db.Uuid
+  externalId Int      @unique
+  /// ISO short name from SMSPool, e.g. US
+  code       String   @unique
+  name       String
+  region     String?
+  createdAt  DateTime @default(now())
+  updatedAt  DateTime @updatedAt
+
+  oneTimeOffers SmsOneTimeOffer[]
+  rentalSkus    SmsRentalSku[]
+
+  @@index([name])
+  @@map("sms_countries")
+}
+
+/// SMSPool verification service (WhatsApp, Telegram, …).
+model SmsService {
+  id         String   @id @default(uuid()) @db.Uuid
+  externalId Int      @unique
+  name       String
+  slug       String   @unique
+  createdAt  DateTime @default(now())
+  updatedAt  DateTime @updatedAt
+
+  oneTimeOffers SmsOneTimeOffer[]
+
+  @@index([name])
+  @@map("sms_services")
+}
+
+/// Buyable one-time SMS SKU: service × country × optional pool.
+model SmsOneTimeOffer {
+  id          String        @id @default(uuid()) @db.Uuid
+  serviceId   String        @db.Uuid
+  countryId   String        @db.Uuid
+  /// SMSPool pool id; 0 = unspecified / cheapest.
+  pool        Int           @default(0)
+  providerCost Decimal      @db.Decimal(18, 4)
+  retailPrice  Decimal      @db.Decimal(18, 4)
+  currency     String       @default("USD")
+  successRate  Decimal?     @db.Decimal(9, 4)
+  status       ProductStatus @default(DRAFT)
+  manualOverride Boolean    @default(false)
+  pricingRuleId String?     @db.Uuid
+  lastSeenAt   DateTime     @default(now())
+  createdAt    DateTime     @default(now())
+  updatedAt    DateTime     @updatedAt
+
+  service     SmsService      @relation(fields: [serviceId], references: [id], onDelete: Cascade)
+  country     SmsCountry      @relation(fields: [countryId], references: [id], onDelete: Cascade)
+  pricingRule SmsPricingRule? @relation(fields: [pricingRuleId], references: [id])
+  orders      Order[]
+  verifications SmsVerification[]
+
+  @@unique([serviceId, countryId, pool])
+  @@index([status, countryId])
+  @@index([status, serviceId])
+  @@index([lastSeenAt])
+  @@map("sms_one_time_offers")
+}
+
+/// Multi-day rental product from `/rental/retrieve_all` (country/pool row).
+model SmsRentalSku {
+  id          String   @id @default(uuid()) @db.Uuid
+  externalId  Int      @unique
+  name        String
+  slug        String   @unique
+  tag         String?
+  region      String?
+  countryId   String?  @db.Uuid
+  countryCode String?
+  pool        Int?
+  /// Whether SMSPool reports this rental as extendable (type=1 catalog).
+  extendable  Boolean  @default(false)
+  priority    Int      @default(0)
+  status      ProductStatus @default(DRAFT)
+  pricingRuleId String? @db.Uuid
+  lastSeenAt  DateTime @default(now())
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  country     SmsCountry?     @relation(fields: [countryId], references: [id])
+  pricingRule SmsPricingRule? @relation(fields: [pricingRuleId], references: [id])
+  plans       SmsRentalPlan[]
+
+  @@index([status, countryCode])
+  @@index([lastSeenAt])
+  @@map("sms_rental_skus")
+}
+
+/// Days-tier price for a rental SKU.
+model SmsRentalPlan {
+  id           String        @id @default(uuid()) @db.Uuid
+  rentalSkuId  String        @db.Uuid
+  days         Int
+  providerCost Decimal       @db.Decimal(18, 4)
+  retailPrice  Decimal       @db.Decimal(18, 4)
+  currency     String        @default("USD")
+  /// Optional stock snapshot from last sync / detail fetch.
+  stockCount   Int?
+  status       ProductStatus @default(DRAFT)
+  manualOverride Boolean     @default(false)
+  lastSeenAt   DateTime      @default(now())
+  createdAt    DateTime      @default(now())
+  updatedAt    DateTime      @updatedAt
+
+  rentalSku SmsRentalSku @relation(fields: [rentalSkuId], references: [id], onDelete: Cascade)
+  orders    Order[]
+  rentals   NumberRental[]
+
+  @@unique([rentalSkuId, days])
+  @@index([status, rentalSkuId])
+  @@map("sms_rental_plans")
+}
+
+/// Percent markup + optional floor on SMSPool USD cost.
+model SmsPricingRule {
+  id            String         @id @default(uuid()) @db.Uuid
+  scope         SmsPricingScope
+  /// Country code, service uuid, rental sku uuid, or "*" for GLOBAL.
+  scopeRef      String         @default("*")
+  name          String
+  markupPercent Decimal        @default(20) @db.Decimal(9, 4)
+  /// Minimum retail in USD; null = no floor beyond cost×markup.
+  floorAmount   Decimal?       @db.Decimal(18, 4)
+  active        Boolean        @default(true)
+  createdAt     DateTime       @default(now())
+  updatedAt     DateTime       @updatedAt
+
+  oneTimeOffers SmsOneTimeOffer[]
+  rentalSkus    SmsRentalSku[]
+
+  @@unique([scope, scopeRef])
+  @@map("sms_pricing_rules")
+}
+
+/// Delivered one-time SMS verification asset.
+model SmsVerification {
+  id      String @id @default(uuid()) @db.Uuid
+  orderId String @unique @db.Uuid
+  offerId String @db.Uuid
+
+  provider         ProviderName          @default(SMSPOOL)
+  /// SMSPool `order_id` / `order_code`.
+  providerOrderId  String?               @unique
+  phoneNumber      String?
+  countryCode      String?
+  /// Short code extracted from SMS when available.
+  smsCode          String?
+  fullSms          String?
+  status           SmsVerificationStatus @default(PENDING)
+  providerCost     Decimal?              @db.Decimal(18, 4)
+  expiresAt        DateTime?
+  rawResponse      Json?
+  createdAt        DateTime              @default(now())
+  updatedAt        DateTime              @updatedAt
+
+  order Order          @relation(fields: [orderId], references: [id], onDelete: Cascade)
+  offer SmsOneTimeOffer @relation(fields: [offerId], references: [id])
+
+  @@index([status, expiresAt])
+  @@index([providerOrderId])
+  @@map("sms_verifications")
+}
+
+/// Delivered multi-day rented number.
+model NumberRental {
+  id      String @id @default(uuid()) @db.Uuid
+  orderId String @unique @db.Uuid
+  planId  String @db.Uuid
+
+  provider           ProviderName       @default(SMSPOOL)
+  rentalCode         String?            @unique
+  phoneNumber        String?
+  days               Int
+  /// Optional SMSPool service the rental was bound to at purchase.
+  serviceExternalId  Int?
+  serviceName        String?
+  status             NumberRentalStatus @default(PENDING)
+  autoExtend         Boolean            @default(false)
+  expiresAt          DateTime?
+  providerCost       Decimal?           @db.Decimal(18, 4)
+  rawResponse        Json?
+  createdAt          DateTime           @default(now())
+  updatedAt          DateTime           @updatedAt
+
+  order    Order               @relation("RentalPurchase", fields: [orderId], references: [id], onDelete: Cascade)
+  plan     SmsRentalPlan       @relation(fields: [planId], references: [id])
+  messages NumberRentalMessage[]
+  extends  Order[]             @relation("RentalExtends")
+
+  @@index([status, expiresAt])
+  @@index([rentalCode])
+  @@map("number_rentals")
+}
+
+model NumberRentalMessage {
+  id                String   @id @default(uuid()) @db.Uuid
+  numberRentalId    String   @db.Uuid
+  providerMessageId String?
+  sender            String?
+  fullSms           String
+  smsCode           String?
+  receivedAt        DateTime @default(now())
+  createdAt         DateTime @default(now())
+
+  numberRental NumberRental @relation(fields: [numberRentalId], references: [id], onDelete: Cascade)
+
+  @@unique([numberRentalId, providerMessageId])
+  @@index([numberRentalId, receivedAt])
+  @@map("number_rental_messages")
+}
+
+model SmsSyncRun {
+  id      String        @id @default(uuid()) @db.Uuid
+  status  SmsSyncStatus @default(RUNNING)
+  /// "cron" | "admin"
+  trigger String
+
+  startedAt  DateTime  @default(now())
+  finishedAt DateTime?
+
+  countriesSynced   Int @default(0)
+  servicesSynced    Int @default(0)
+  offersSynced      Int @default(0)
+  offersCreated     Int @default(0)
+  offersUpdated     Int @default(0)
+  offersArchived    Int @default(0)
+  rentalSkusSynced  Int @default(0)
+  rentalPlansSynced Int @default(0)
+  rentalPlansArchived Int @default(0)
+
+  sweepSkippedReason String?
+  errors             Json?
+  createdAt          DateTime @default(now())
+  updatedAt          DateTime @updatedAt
+
+  @@index([startedAt])
+  @@map("sms_sync_runs")
 }
 
 model WebhookEvent {

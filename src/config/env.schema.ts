@@ -75,6 +75,29 @@ export const envSchema = z.object({
     .min(0)
     .max(100)
     .default(10),
+  /**
+   * SMSPool API key (Settings → API). Optional so the app boots without SMS
+   * credentials — SmsPoolService throws on first use if unset.
+   */
+  SMSPOOL_API_KEY: z.string().optional().default(''),
+  SMSPOOL_BASE_URL: z.string().url().default('https://api.smspool.net'),
+  /** Shared secret we check on inbound webhooks (X-SmsPool-Secret header). Empty = skip verify. */
+  SMSPOOL_WEBHOOK_SECRET: z.string().optional().default(''),
+  SMSPOOL_MIN_BALANCE_ALERT: z.coerce.number().nonnegative().default(10),
+  SMSPOOL_SYNC_CRON_ENABLED: z.coerce.boolean().default(false),
+  SMSPOOL_SYNC_CRON: z.string().default('0 4 * * *'),
+  /** How long a one-time number waits for SMS before cancel+refund (seconds). */
+  SMSPOOL_SMS_TIMEOUT_SECONDS: z.coerce
+    .number()
+    .int()
+    .min(60)
+    .max(3600)
+    .default(1200),
+  SMSPOOL_ARCHIVE_SWEEP_MAX_PERCENT: z.coerce
+    .number()
+    .min(0)
+    .max(100)
+    .default(15),
   /** Master switch. Off by default so local dev without SMTP configured never tries to send. */
   EMAIL_ENABLED: z.coerce.boolean().default(false),
   /** Any SMTP host works here — Resend's SMTP relay (smtp.resend.com, user "resend", pass "<API key>"), Gmail, SES, Mailgun, Postmark, etc. Swapping providers is just changing these env vars. */

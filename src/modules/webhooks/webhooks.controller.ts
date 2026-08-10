@@ -86,4 +86,24 @@ export class WebhooksController {
     const raw = req.rawBody?.toString('utf8') ?? JSON.stringify(req.body ?? {});
     return this.webhooksService.handleReloadly(raw, signature, timestamp);
   }
+
+  @Post('smspool')
+  @ApiOperation({
+    summary: 'SMSPool incoming SMS / rental webhook',
+    description: [
+      'No Clerk auth. Register in SMSPool Settings → Webhook:',
+      '`https://<host>/api/v1/webhooks/smspool`.',
+      'Payloads: Incoming SMS (`orderid`), Incoming rental SMS (`rental_code` + `full_sms`),',
+      'Auto-extend status (`rental_code` + `success`).',
+      'Optional `X-SmsPool-Secret` checked against `SMSPOOL_WEBHOOK_SECRET` when set.',
+    ].join('\n'),
+  })
+  @ApiOkResponse({ schema: { example: { received: true } } })
+  handleSmsPool(
+    @Req() req: RawBodyRequest<Request>,
+    @Headers('x-smspool-secret') secret?: string,
+  ) {
+    const raw = req.rawBody?.toString('utf8') ?? JSON.stringify(req.body ?? {});
+    return this.webhooksService.handleSmsPool(raw, secret);
+  }
 }

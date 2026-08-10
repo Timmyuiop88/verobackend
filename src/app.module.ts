@@ -19,6 +19,7 @@ import { HealthModule } from './modules/health/health.module';
 import { NotificationsModule } from './modules/notifications/notifications.module';
 import { OrdersModule } from './modules/orders/orders.module';
 import { PaymentsModule } from './modules/payments/payments.module';
+import { SmsModule } from './modules/sms/sms.module';
 import { TransactionsModule } from './modules/transactions/transactions.module';
 import { UsersModule } from './modules/users/users.module';
 import { WalletModule } from './modules/wallet/wallet.module';
@@ -60,6 +61,7 @@ import { WebhooksModule } from './modules/webhooks/webhooks.module';
     EsimsModule,
     FulfillmentModule,
     GiftCardsModule,
+    SmsModule,
     UsageModule,
     WebhooksModule,
     AdminModule,
