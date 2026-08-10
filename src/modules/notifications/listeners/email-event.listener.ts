@@ -2,6 +2,7 @@ import { Injectable } from '@nestjs/common';
 import { OnEvent } from '@nestjs/event-emitter';
 import {
   DomainEvent,
+  type GiftCardIssuedPayload,
   type OrderCompletedPayload,
   type OrderFailedPayload,
   type TopUpCompletedPayload,
@@ -70,7 +71,7 @@ export class EmailEventListener {
       to,
       amount: payload.amount,
       reasonText: humanizeFailureReason(payload.reason),
-      isTopUp: payload.orderType === 'TOPUP',
+      kind: payload.orderType,
     });
   }
 
@@ -81,6 +82,18 @@ export class EmailEventListener {
     await this.emailService.sendTopUpCompleted({
       to,
       amount: payload.amount,
+    });
+  }
+
+  @OnEvent(DomainEvent.GiftCardIssued)
+  async onGiftCardIssued(payload: GiftCardIssuedPayload): Promise<void> {
+    const to = await this.emailFor(payload.userId);
+    if (!to) return;
+    await this.emailService.sendGiftCardReady({
+      to,
+      amount: payload.amount,
+      productName: payload.productName,
+      faceValue: payload.faceValue,
     });
   }
 }

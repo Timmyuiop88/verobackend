@@ -80,8 +80,12 @@ async function bootstrap() {
       'Asset-shaped view over purchased eSIMs ("my eSIMs") — status, data balance, and top-ups. Purchases still go through POST /orders; everything after that lives here.',
     )
     .addTag(
+      'giftcards',
+      'Reloadly-backed gift cards. Browse published cards, buy a denomination with wallet balance, then reveal the code. Countries/categories here are gift-card specific — they are not the eSIM regions list.',
+    )
+    .addTag(
       'admin',
-      'Requires Clerk admin role (publicMetadata.role=admin or org:admin). Catalog sync/pricing/approval, top-up catalog management, order/wallet support tools.',
+      'Requires Clerk admin role (publicMetadata.role=admin or org:admin). Catalog sync/pricing/approval, top-up catalog management, gift card catalog + pricing rules, order/wallet support tools.',
     )
     .addTag(
       'webhooks',

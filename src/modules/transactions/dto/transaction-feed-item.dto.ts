@@ -3,6 +3,7 @@ import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
 export enum TransactionCategory {
   ESIM_PURCHASE = 'ESIM_PURCHASE',
   ESIM_TOPUP = 'ESIM_TOPUP',
+  GIFT_CARD_PURCHASE = 'GIFT_CARD_PURCHASE',
   WALLET_DEPOSIT = 'WALLET_DEPOSIT',
   WALLET_REFUND = 'WALLET_REFUND',
   WALLET_ADJUSTMENT = 'WALLET_ADJUSTMENT',

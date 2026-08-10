@@ -1,16 +1,16 @@
 # Transactions Feed — Frontend Guide
 
 One unified, paginated, filterable timeline covering everything that has ever moved
-money on the account — eSIM purchases, eSIM top-ups, wallet deposits, refunds, and support
-adjustments — instead of stitching together `GET /orders` and `GET /wallet` yourself. This
-is what should power a "Transactions" screen with date range / type / category / status
-filters and All / Completed / Pending / Failed tabs.
+money on the account — eSIM purchases, eSIM top-ups, gift card purchases, wallet deposits,
+refunds, and support adjustments — instead of stitching together `GET /orders` and
+`GET /wallet` yourself. This is what should power a "Transactions" screen with date range /
+type / category / status filters and All / Completed / Pending / Failed tabs.
 
-> **Scope note:** categories like "Rent a Number" or "Gift Card" you may have seen in
-> other product mockups **are not part of TradeVero** — this backend only has eSIM +
-> wallet activity today. The `category` field below is deliberately designed so those (or
-> anything else) can be added later as new categories in the *same* feed, without any
-> breaking change to this endpoint's shape.
+> **Scope note:** categories like "Rent a Number" that you may have seen in other product
+> mockups **are not part of TradeVero** yet. The `category` field below is deliberately
+> designed so those can be added later as new categories in the *same* feed, without any
+> breaking change to this endpoint's shape — that is exactly how `GIFT_CARD_PURCHASE` was
+> added.
 
 ## Endpoint
 
@@ -22,7 +22,7 @@ filters and All / Completed / Pending / Failed tabs.
 |---|---|---|
 | `page` | number | default `1` |
 | `limit` | number | default `20`, max `100` |
-| `category` | `ESIM_PURCHASE` \| `ESIM_TOPUP` \| `WALLET_DEPOSIT` \| `WALLET_REFUND` \| `WALLET_ADJUSTMENT` | "Category" dropdown |
+| `category` | `ESIM_PURCHASE` \| `ESIM_TOPUP` \| `GIFT_CARD_PURCHASE` \| `WALLET_DEPOSIT` \| `WALLET_REFUND` \| `WALLET_ADJUSTMENT` | "Category" dropdown |
 | `type` | `credit` \| `debit` | "Type" dropdown — credit = money in, debit = money out |
 | `status` | `COMPLETED` \| `PENDING` \| `FAILED` | "Status" dropdown / the All/Completed/Pending/Failed tabs |
 | `dateFrom` | date (`YYYY-MM-DD`) | inclusive start of the "Date Range" picker |

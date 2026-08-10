@@ -1,7 +1,7 @@
 import { InjectQueue } from '@nestjs/bullmq';
 import { Injectable, Logger } from '@nestjs/common';
 import { Cron } from '@nestjs/schedule';
-import { OrderStatus } from '@prisma/client';
+import { OrderStatus, OrderType } from '@prisma/client';
 import { Queue } from 'bullmq';
 import { opsAlert } from '../../common/observability/ops-alert';
 import { PrismaService } from '../../common/prisma/prisma.service';
@@ -39,7 +39,13 @@ export class ReconciliationService {
     const cutoff = new Date(Date.now() - STUCK_ORDER_THRESHOLD_MS);
 
     const stuck = await this.prisma.order.findMany({
-      where: { status: OrderStatus.FULFILLING, updatedAt: { lt: cutoff } },
+      where: {
+        status: OrderStatus.FULFILLING,
+        updatedAt: { lt: cutoff },
+        // eSIM order types only — gift cards wedge for entirely different
+        // reasons and have their own sweep against the Reloadly API.
+        orderType: { in: [OrderType.PURCHASE, OrderType.TOPUP] },
+      },
       include: { providerOrder: true },
       take: 50,
     });

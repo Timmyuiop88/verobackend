@@ -5,6 +5,7 @@ import { APP_GUARD } from '@nestjs/core';
 import { EventEmitterModule } from '@nestjs/event-emitter';
 import { ScheduleModule } from '@nestjs/schedule';
 import { ThrottlerGuard, ThrottlerModule } from '@nestjs/throttler';
+import { CryptoModule } from './common/crypto/crypto.module';
 import { PrismaModule } from './common/prisma/prisma.module';
 import { AppConfigModule } from './config/config.module';
 import type { Env } from './config/env.schema';
@@ -13,6 +14,7 @@ import { AuthModule } from './modules/auth/auth.module';
 import { CatalogModule } from './modules/catalog/catalog.module';
 import { EsimsModule } from './modules/esims/esims.module';
 import { FulfillmentModule } from './modules/fulfillment/fulfillment.module';
+import { GiftCardsModule } from './modules/giftcards/giftcards.module';
 import { HealthModule } from './modules/health/health.module';
 import { NotificationsModule } from './modules/notifications/notifications.module';
 import { OrdersModule } from './modules/orders/orders.module';
@@ -27,6 +29,7 @@ import { WebhooksModule } from './modules/webhooks/webhooks.module';
   imports: [
     AppConfigModule,
     PrismaModule,
+    CryptoModule,
     ScheduleModule.forRoot(),
     // Global — lets any service `emit()`/`@OnEvent()` domain events (wallet
     // credited, order completed/failed, top-up completed) without every
@@ -56,6 +59,7 @@ import { WebhooksModule } from './modules/webhooks/webhooks.module';
     OrdersModule,
     EsimsModule,
     FulfillmentModule,
+    GiftCardsModule,
     UsageModule,
     WebhooksModule,
     AdminModule,

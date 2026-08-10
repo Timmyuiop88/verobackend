@@ -3,6 +3,7 @@ import { OnEvent } from '@nestjs/event-emitter';
 import { NotificationType } from '@prisma/client';
 import {
   DomainEvent,
+  type GiftCardIssuedPayload,
   type OrderCompletedPayload,
   type OrderFailedPayload,
   type TopUpCompletedPayload,
@@ -93,15 +94,31 @@ export class NotificationsEventListener {
 
   @OnEvent(DomainEvent.OrderFailed)
   async onOrderFailed(payload: OrderFailedPayload): Promise<void> {
-    const isTopUp = payload.orderType === 'TOPUP';
+    const titles: Record<string, string> = {
+      TOPUP: 'Top-up failed — refunded',
+      GIFT_CARD: 'Gift card purchase failed — refunded',
+      PURCHASE: 'Purchase failed — refunded',
+    };
     await this.notificationsService.create({
       userId: payload.userId,
-      type: NotificationType.ORDER_FAILED,
-      title: isTopUp
-        ? 'Top-up failed — refunded'
-        : 'Purchase failed — refunded',
+      type:
+        payload.orderType === 'GIFT_CARD'
+          ? NotificationType.GIFT_CARD_FAILED
+          : NotificationType.ORDER_FAILED,
+      title: titles[payload.orderType] ?? titles.PURCHASE,
       message: `${humanizeFailureReason(payload.reason)}. You've been refunded ${formatUsd(payload.amount)}.`,
       data: { orderId: payload.orderId, reason: payload.reason },
+    });
+  }
+
+  @OnEvent(DomainEvent.GiftCardIssued)
+  async onGiftCardIssued(payload: GiftCardIssuedPayload): Promise<void> {
+    await this.notificationsService.create({
+      userId: payload.userId,
+      type: NotificationType.GIFT_CARD_READY,
+      title: 'Your gift card is ready',
+      message: `${payload.productName} (${formatUsd(payload.faceValue)}) has been issued. Tap to view your code.`,
+      data: { orderId: payload.orderId, cardCount: payload.cardCount },
     });
   }
 

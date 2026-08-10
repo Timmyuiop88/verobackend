@@ -62,10 +62,13 @@ enum OrderType {
   PURCHASE
   /// Adds data/validity to an existing eSIM (targetProviderOrderId).
   TOPUP
+  /// Buys a gift card denomination from Reloadly (GiftCardIssuance).
+  GIFT_CARD
 }
 
 enum ProviderName {
   ESIM_ACCESS
+  RELOADLY
 }
 
 enum NotificationType {
@@ -77,6 +80,42 @@ enum NotificationType {
   TOPUP_COMPLETED
   TOPUP_FAILED
   GENERIC
+  GIFT_CARD_READY
+  GIFT_CARD_FAILED
+}
+
+enum GiftCardDenominationType {
+  /// Customer buys one of `fixedRecipientDenominations`.
+  FIXED
+  /// Customer picks any amount between min/max — priced live, phase 3.
+  RANGE
+}
+
+/// Resolution order when pricing a denomination: the most specific active
+/// rule wins (PRODUCT beats BRAND beats CATEGORY beats COUNTRY beats GLOBAL).
+enum GiftCardPricingScope {
+  GLOBAL
+  COUNTRY
+  CATEGORY
+  BRAND
+  PRODUCT
+}
+
+/// Mirrors Reloadly's transaction statuses. Note the difference between
+/// REFUNDED (Reloadly already reversed their charge) and FAILED (they have
+/// not) — the latter needs manual reconciliation against their balance.
+enum GiftCardIssuanceStatus {
+  PENDING
+  PROCESSING
+  SUCCESSFUL
+  FAILED
+  REFUNDED
+}
+
+enum GiftCardSyncStatus {
+  RUNNING
+  COMPLETED
+  FAILED
 }
 
 model User {
@@ -287,29 +326,34 @@ model TopUpProduct {
 }
 
 model Order {
-  id                    String      @id @default(uuid()) @db.Uuid
-  userId                String      @db.Uuid
-  orderType             OrderType   @default(PURCHASE)
+  id                     String      @id @default(uuid()) @db.Uuid
+  userId                 String      @db.Uuid
+  orderType              OrderType   @default(PURCHASE)
   /// Required for PURCHASE, unused (null) for TOPUP — top-up packages aren't
   /// synced catalog items, their price is computed live at request time.
-  productId             String?     @db.Uuid
-  amount                Decimal     @db.Decimal(18, 4)
-  currency              String      @default("USD")
-  status                OrderStatus @default(PAID)
+  productId              String?     @db.Uuid
+  amount                 Decimal     @db.Decimal(18, 4)
+  currency               String      @default("USD")
+  status                 OrderStatus @default(PAID)
   /// Machine-readable reason set when status transitions to FAILED/REFUNDED (e.g. "provider_rejected:200007:...")
-  failureReason         String?
+  failureReason          String?
   /// Set only for TOPUP orders — the existing eSIM (ProviderOrder) being topped up.
-  targetProviderOrderId String?     @db.Uuid
+  targetProviderOrderId  String?     @db.Uuid
   /// Set only for TOPUP orders — which curated TopUpProduct SKU was charged, for auditing/reporting.
-  topUpProductId        String?     @db.Uuid
-  createdAt             DateTime    @default(now())
-  updatedAt             DateTime    @updatedAt
+  topUpProductId         String?     @db.Uuid
+  /// Set only for GIFT_CARD orders — the exact denomination SKU that was sold.
+  giftCardDenominationId String?     @db.Uuid
+  createdAt              DateTime    @default(now())
+  updatedAt              DateTime    @updatedAt
 
   user                User           @relation(fields: [userId], references: [id], onDelete: Cascade)
   product             Product?       @relation(fields: [productId], references: [id])
   topUpProduct        TopUpProduct?  @relation(fields: [topUpProductId], references: [id])
   providerOrder       ProviderOrder? @relation("PurchaseOrder")
   targetProviderOrder ProviderOrder? @relation("TopUps", fields: [targetProviderOrderId], references: [id])
+
+  giftCardDenomination GiftCardDenomination? @relation(fields: [giftCardDenominationId], references: [id])
+  giftCardIssuance     GiftCardIssuance?
 
   @@index([userId, createdAt])
   /// Powers the stuck-order reconciliation sweep (find orders wedged in FULFILLING).
@@ -369,6 +413,295 @@ model EsimUsage {
   providerOrder ProviderOrder @relation(fields: [providerOrderId], references: [id], onDelete: Cascade)
 
   @@map("esim_usages")
+}
+
+/// Countries supported for gift cards, from Reloadly `GET /countries`.
+/// Deliberately separate from `Region` (the eSIM location table) — the two
+/// providers have unrelated code sets and Region's type/subLocations
+/// semantics don't apply here.
+model GiftCardCountry {
+  id             String   @id @default(uuid()) @db.Uuid
+  /// Reloadly `isoName`, e.g. US
+  code           String   @unique
+  name           String
+  continent      String?
+  currencyCode   String?
+  currencyName   String?
+  currencySymbol String?
+  flagUrl        String?
+  /// ["+1", ...]
+  callingCodes   Json?
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+
+  @@index([name])
+  @@map("gift_card_countries")
+}
+
+/// Reloadly `GET /product-categories`, plus TradeVero-owned merchandising fields.
+model GiftCardCategory {
+  id           String   @id @default(uuid()) @db.Uuid
+  externalId   Int      @unique
+  name         String
+  slug         String   @unique
+  displayOrder Int      @default(0)
+  featured     Boolean  @default(false)
+  iconUrl      String?
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  products GiftCardProduct[]
+
+  @@map("gift_card_categories")
+}
+
+/// Derived from the `brand` object embedded in each product. Groups the
+/// per-country variants of one brand (Amazon US / Amazon UK / Amazon DE).
+model GiftCardBrand {
+  id         String   @id @default(uuid()) @db.Uuid
+  externalId Int      @unique
+  name       String
+  slug       String   @unique
+  logoUrl    String?
+  createdAt  DateTime @default(now())
+  updatedAt  DateTime @updatedAt
+
+  products GiftCardProduct[]
+
+  @@index([name])
+  @@map("gift_card_brands")
+}
+
+/// A Reloadly gift card product — the *parent* of one or more buyable
+/// denominations, not a SKU itself. Customers always order a
+/// GiftCardDenomination; this row holds the brand/country/redeem metadata
+/// and the provider economics shared across its denominations.
+model GiftCardProduct {
+  id                String                   @id @default(uuid()) @db.Uuid
+  externalProductId Int                      @unique
+  name              String
+  slug              String                   @unique
+  brandId           String?                  @db.Uuid
+  categoryId        String?                  @db.Uuid
+  /// ISO code matching GiftCardCountry.code. Not an FK — Reloadly occasionally
+  /// returns product countries absent from /countries, and a missing country
+  /// row shouldn't fail the whole sync.
+  countryCode       String?
+  /// Redeemable in any country rather than tied to `countryCode`.
+  global            Boolean                  @default(false)
+  /// TradeVero curation state — DRAFT until an admin publishes.
+  status            ProductStatus            @default(DRAFT)
+  /// Reloadly's own ACTIVE/INACTIVE flag, kept separate from our `status`.
+  providerStatus    String?
+  denominationType  GiftCardDenominationType @default(FIXED)
+
+  /// Currency the card is denominated in (what the recipient sees).
+  recipientCurrencyCode String  @default("USD")
+  /// Currency Reloadly charges our prepaid balance in (our account currency).
+  senderCurrencyCode    String  @default("USD")
+  /// recipientCurrencyToSenderCurrencyExchangeRate at last sync.
+  exchangeRate          Decimal @default(1) @db.Decimal(18, 8)
+
+  /// Reloadly's per-transaction fee, as a percentage of the sender amount.
+  senderFeePercentage Decimal @default(0) @db.Decimal(9, 4)
+  /// Flat component of the fee, when the provider quotes one.
+  senderFeeFixed      Decimal @default(0) @db.Decimal(18, 4)
+  /// Our commission — deducted from the charge at purchase. This is the
+  /// primary source of gift card margin.
+  discountPercentage  Decimal @default(0) @db.Decimal(9, 4)
+
+  supportsPreOrder Boolean @default(false)
+  /// additionalRequirements.userIdRequired — needs a game/user ID at checkout.
+  userIdRequired   Boolean @default(false)
+  logoUrls         Json?
+
+  redeemInstructionConcise String?
+  redeemInstructionVerbose String?
+
+  /// RANGE products only — customer-chosen amount bounds (phase 3).
+  minRecipientDenomination Decimal? @db.Decimal(18, 4)
+  maxRecipientDenomination Decimal? @db.Decimal(18, 4)
+  minSenderDenomination    Decimal? @db.Decimal(18, 4)
+  maxSenderDenomination    Decimal? @db.Decimal(18, 4)
+
+  /// Optional per-product pricing override; otherwise resolved by scope chain.
+  pricingRuleId String? @db.Uuid
+
+  /// Stamped with the sync run's start time on every run that sees this
+  /// product. Rows left behind are what the stale sweep archives.
+  lastSeenAt DateTime @default(now())
+  metadata   Json?
+  createdAt  DateTime @default(now())
+  updatedAt  DateTime @updatedAt
+
+  brand         GiftCardBrand?         @relation(fields: [brandId], references: [id])
+  category      GiftCardCategory?      @relation(fields: [categoryId], references: [id])
+  pricingRule   GiftCardPricingRule?   @relation(fields: [pricingRuleId], references: [id])
+  denominations GiftCardDenomination[]
+
+  @@index([status, countryCode])
+  @@index([status, categoryId])
+  @@index([status, brandId])
+  @@index([lastSeenAt])
+  @@index([name])
+  @@map("gift_card_products")
+}
+
+/// The actual buyable SKU. One row per face value offered by the parent
+/// product, each priced and published independently — a $5 tier can be
+/// unprofitable and stay hidden while the $50 tier of the same product sells.
+model GiftCardDenomination {
+  id        String @id @default(uuid()) @db.Uuid
+  productId String @db.Uuid
+
+  /// Face value in the product's recipient currency — what the card is worth.
+  faceValue      Decimal @db.Decimal(18, 4)
+  /// What Reloadly charges us before fee/discount (fixedRecipientToSenderDenominationsMap).
+  senderCost     Decimal @db.Decimal(18, 4)
+  feeAmount      Decimal @default(0) @db.Decimal(18, 4)
+  /// Commission credited back by Reloadly on this denomination.
+  discountAmount Decimal @default(0) @db.Decimal(18, 4)
+  /// senderCost + feeAmount - discountAmount. The number retail must beat.
+  netCost        Decimal @db.Decimal(18, 4)
+  retailPrice    Decimal @db.Decimal(18, 4)
+  currency       String  @default("USD")
+
+  status         ProductStatus @default(DRAFT)
+  /// Retail price was set by hand — sync recalculation skips this row.
+  manualOverride Boolean       @default(false)
+  /// False when no price clears the margin floor without breaching the
+  /// over-face ceiling. Such rows are never auto-published.
+  viable         Boolean       @default(true)
+  viabilityNote  String?
+  sortOrder      Int           @default(0)
+  lastSeenAt     DateTime      @default(now())
+  createdAt      DateTime      @default(now())
+  updatedAt      DateTime      @updatedAt
+
+  product GiftCardProduct @relation(fields: [productId], references: [id], onDelete: Cascade)
+  orders  Order[]
+
+  @@unique([productId, faceValue])
+  @@index([productId, status])
+  @@index([status, viable])
+  @@map("gift_card_denominations")
+}
+
+/// Gift card margin rules. Separate from PricingProfile (which is a flat
+/// cost markup for eSIM) because gift cards are priced against face value:
+/// retail = max(netCost × (1 + minMargin), face × (1 - customerDiscount)),
+/// rejected entirely if that exceeds face × (1 + maxOverFace).
+model GiftCardPricingRule {
+  id       String               @id @default(uuid()) @db.Uuid
+  scope    GiftCardPricingScope
+  /// Category/brand/product uuid, or ISO country code. "*" for GLOBAL —
+  /// a sentinel rather than null so the unique constraint actually holds
+  /// (Postgres treats NULLs as distinct).
+  scopeRef String               @default("*")
+  name     String
+
+  /// Minimum profit over net cost, as a percentage. The price floor.
+  minMarginPercent        Decimal @default(5) @db.Decimal(9, 4)
+  /// Discount off face value offered to the customer when margin allows.
+  customerDiscountPercent Decimal @default(1) @db.Decimal(9, 4)
+  /// How far above face value this scope may be priced before the
+  /// denomination is treated as non-viable. Gaming tolerates a lot; retail
+  /// brands tolerate almost none.
+  maxOverFacePercent      Decimal @default(3) @db.Decimal(9, 4)
+
+  active    Boolean  @default(true)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  products GiftCardProduct[]
+
+  @@unique([scope, scopeRef])
+  @@map("gift_card_pricing_rules")
+}
+
+/// The delivered asset for a GIFT_CARD order — Reloadly's counterpart to
+/// ProviderOrder. Card codes are bearer instruments (anyone holding them can
+/// spend them), so they are stored only as an AES-256-GCM ciphertext blob and
+/// never returned by list endpoints.
+model GiftCardIssuance {
+  id      String @id @default(uuid()) @db.Uuid
+  orderId String @unique @db.Uuid
+
+  provider              ProviderName           @default(RELOADLY)
+  /// Reloadly's transactionId, once the order is accepted.
+  reloadlyTransactionId BigInt?
+  /// Our orderId, sent as Reloadly's `customIdentifier`. Makes the provider
+  /// call idempotent: a duplicate is proof the order already went through.
+  customIdentifier      String                 @unique
+  providerStatus        GiftCardIssuanceStatus @default(PENDING)
+
+  productExternalId Int?
+  quantity          Int     @default(1)
+  /// Face value sent as Reloadly's `unitPrice`.
+  unitPrice         Decimal @db.Decimal(18, 4)
+
+  /// Realized economics, read back from the provider transaction rather than
+  /// the synced catalog — prices drift between nightly syncs, so margin is
+  /// only trustworthy after the fact.
+  amountCharged    Decimal? @db.Decimal(18, 4)
+  discountReceived Decimal? @db.Decimal(18, 4)
+  feePaid          Decimal? @db.Decimal(18, 4)
+  /// retail charged - (amountCharged + feePaid - discountReceived).
+  realizedMargin   Decimal? @db.Decimal(18, 4)
+  senderCurrency   String?
+
+  /// AES-256-GCM ciphertext of [{ cardNumber, pinCode, redemptionUrl }, ...].
+  /// The redemption URL embeds the code, so it is encrypted alongside them.
+  cardsEncrypted String?
+  cardCount      Int       @default(0)
+  codesFetchedAt DateTime?
+  revealedAt     DateTime?
+  revealCount    Int       @default(0)
+
+  /// Provider payload with card/PIN fields stripped before persisting.
+  rawResponse Json?
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  order Order @relation(fields: [orderId], references: [id], onDelete: Cascade)
+
+  @@index([reloadlyTransactionId])
+  @@index([providerStatus])
+  @@map("gift_card_issuances")
+}
+
+/// Audit trail for catalog syncs. The eSIM sync has no equivalent, which
+/// makes a half-failed run invisible; with ~13k products and an archive
+/// sweep, knowing exactly what a run touched matters.
+model GiftCardSyncRun {
+  id      String             @id @default(uuid()) @db.Uuid
+  status  GiftCardSyncStatus @default(RUNNING)
+  /// "cron" | "admin"
+  trigger String
+
+  startedAt  DateTime  @default(now())
+  finishedAt DateTime?
+
+  countriesSynced     Int @default(0)
+  categoriesSynced    Int @default(0)
+  brandsSynced        Int @default(0)
+  pagesFetched        Int @default(0)
+  productsSynced      Int @default(0)
+  productsCreated     Int @default(0)
+  productsUpdated     Int @default(0)
+  productsArchived    Int @default(0)
+  denominationsSynced Int @default(0)
+  denominationsHidden Int @default(0)
+
+  /// Populated when the stale sweep declined to run (page errors, or the
+  /// archive count breaching GIFTCARD_ARCHIVE_SWEEP_MAX_PERCENT).
+  sweepSkippedReason String?
+  errors             Json?
+  createdAt          DateTime @default(now())
+  updatedAt          DateTime @updatedAt
+
+  @@index([startedAt])
+  @@map("gift_card_sync_runs")
 }
 
 model WebhookEvent {

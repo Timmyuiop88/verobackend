@@ -152,15 +152,45 @@ export class EmailService implements OnModuleInit {
     });
   }
 
+  /**
+   * Notifies without disclosing. The card number and PIN are bearer
+   * instruments, so email — which is neither authenticated nor encrypted at
+   * rest on the recipient's side — only ever points back to the app.
+   */
+  async sendGiftCardReady(params: {
+    to: string;
+    amount: string;
+    productName: string;
+    faceValue: string;
+  }): Promise<void> {
+    const html = renderEmailLayout({
+      heading: 'Your gift card is ready 🎁',
+      bodyHtml: [
+        `<p><strong>${params.productName}</strong> (${formatUsd(params.faceValue)}) has been issued.</p>`,
+        amountRow('Amount charged', `-${formatUsd(params.amount)}`),
+        `<p>Open the app and go to <strong>My Gift Cards</strong> to view your code.</p>`,
+        `<p style="color:#6b7280;font-size:13px;">For your security the code is never sent by email — anyone holding it can spend it.</p>`,
+      ].join(''),
+    });
+    await this.send({
+      to: params.to,
+      subject: 'Your gift card is ready',
+      html,
+    });
+  }
+
   async sendOrderFailed(params: {
     to: string;
     amount: string;
     reasonText: string;
-    isTopUp: boolean;
+    kind: 'PURCHASE' | 'TOPUP' | 'GIFT_CARD';
   }): Promise<void> {
-    const subject = params.isTopUp
-      ? 'Your top-up could not be completed — refunded'
-      : 'Your eSIM purchase could not be completed — refunded';
+    const subject =
+      params.kind === 'TOPUP'
+        ? 'Your top-up could not be completed — refunded'
+        : params.kind === 'GIFT_CARD'
+          ? 'Your gift card purchase could not be completed — refunded'
+          : 'Your eSIM purchase could not be completed — refunded';
     const html = renderEmailLayout({
       heading: 'Order refunded',
       bodyHtml: [

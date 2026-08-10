@@ -65,4 +65,25 @@ export class WebhooksController {
       signature || altSignature,
     );
   }
+
+  @Post('reloadly')
+  @ApiOperation({
+    summary: 'Reloadly gift card transaction status webhook',
+    description: [
+      'No Clerk auth. Register in Reloadly Dashboard → Developers → Webhooks:',
+      '`https://<host>/api/v1/webhooks/reloadly`, service Gift Cards, event `giftcard_transaction.status`.',
+      'Verifies `X-Reloadly-Signature` as HMAC-SHA256 of `body + ":" + X-Reloadly-Request-Timestamp`',
+      'using `RELOADLY_WEBHOOK_SECRET` (the dashboard signing secret — not the API client secret).',
+      'Local: point ngrok at this API. Completes/refunds gift card orders the same way the poll queue does.',
+    ].join('\n'),
+  })
+  @ApiOkResponse({ schema: { example: { received: true } } })
+  handleReloadly(
+    @Req() req: RawBodyRequest<Request>,
+    @Headers('x-reloadly-signature') signature?: string,
+    @Headers('x-reloadly-request-timestamp') timestamp?: string,
+  ) {
+    const raw = req.rawBody?.toString('utf8') ?? JSON.stringify(req.body ?? {});
+    return this.webhooksService.handleReloadly(raw, signature, timestamp);
+  }
 }

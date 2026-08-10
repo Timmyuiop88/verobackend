@@ -26,6 +26,55 @@ export const envSchema = z.object({
   ESIM_SECRET_KEY: z.string().min(1),
   ESIM_BASE_URL: z.string().url().default('https://api.esimaccess.com'),
   ESIM_ACCESS_WEBHOOK_SECRET: z.string().optional().default(''),
+  /**
+   * Reloadly gift cards. Left optional (rather than `.min(1)` like eSIM Access)
+   * so the app still boots without gift-card credentials — ReloadlyService
+   * throws a clear "not configured" error on first use instead.
+   */
+  RELOADLY_CLIENT_ID: z.string().optional().default(''),
+  RELOADLY_CLIENT_SECRET: z.string().optional().default(''),
+  /** `sandbox` targets giftcards-sandbox.reloadly.com and spends test balance. */
+  RELOADLY_ENV: z.enum(['sandbox', 'live']).default('sandbox'),
+  RELOADLY_AUTH_URL: z
+    .string()
+    .url()
+    .default('https://auth.reloadly.com/oauth/token'),
+  /** Shown to the recipient as the sender of the gift card. */
+  RELOADLY_SENDER_NAME: z.string().default('TradeVero'),
+  /** Reloadly is prepaid — ops alert fires when the balance drops below this (sender currency). */
+  RELOADLY_MIN_BALANCE_ALERT: z.coerce.number().nonnegative().default(50),
+  /**
+   * Webhook signing secret from Reloadly Dashboard → Developers → Webhooks.
+   * Different from RELOADLY_CLIENT_SECRET. Empty = signature check skipped
+   * (local only — production must set this).
+   */
+  RELOADLY_WEBHOOK_SECRET: z.string().optional().default(''),
+  /**
+   * 32-byte key as 64 hex chars, used for AES-256-GCM encryption of gift card
+   * numbers/PINs at rest. Generate with `openssl rand -hex 32`. Rotating this
+   * makes previously stored codes undecryptable.
+   */
+  GIFTCARD_ENCRYPTION_KEY: z
+    .string()
+    .regex(/^$|^[0-9a-fA-F]{64}$/, 'must be 64 hex characters (32 bytes)')
+    .optional()
+    .default(''),
+  /** Master switch for the nightly catalog sync (manual admin trigger still works). */
+  GIFTCARD_SYNC_CRON_ENABLED: z.coerce.boolean().default(false),
+  GIFTCARD_SYNC_CRON: z.string().default('0 3 * * *'),
+  GIFTCARD_SYNC_PAGE_SIZE: z.coerce.number().int().min(1).max(500).default(200),
+  /** Parallel product pages in flight. Keep low — Reloadly rate-limits aggressively. */
+  GIFTCARD_SYNC_CONCURRENCY: z.coerce.number().int().min(1).max(10).default(3),
+  /**
+   * Safety valve on the stale-product sweep: if a run would archive more than
+   * this share of the live catalog, skip archiving entirely and alert instead.
+   * Stops a partial provider outage from emptying the storefront.
+   */
+  GIFTCARD_ARCHIVE_SWEEP_MAX_PERCENT: z.coerce
+    .number()
+    .min(0)
+    .max(100)
+    .default(10),
   /** Master switch. Off by default so local dev without SMTP configured never tries to send. */
   EMAIL_ENABLED: z.coerce.boolean().default(false),
   /** Any SMTP host works here — Resend's SMTP relay (smtp.resend.com, user "resend", pass "<API key>"), Gmail, SES, Mailgun, Postmark, etc. Swapping providers is just changing these env vars. */

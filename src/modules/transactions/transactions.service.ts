@@ -16,9 +16,10 @@ import {
   type OrderForFeed,
 } from './transactions.mapper';
 
-const ESIM_CATEGORIES: TransactionCategory[] = [
+const ORDER_CATEGORIES: TransactionCategory[] = [
   TransactionCategory.ESIM_PURCHASE,
   TransactionCategory.ESIM_TOPUP,
+  TransactionCategory.GIFT_CARD_PURCHASE,
 ];
 const WALLET_CATEGORIES: TransactionCategory[] = [
   TransactionCategory.WALLET_DEPOSIT,
@@ -27,9 +28,9 @@ const WALLET_CATEGORIES: TransactionCategory[] = [
 ];
 
 /**
- * Unified "Transactions" feed over eSIM orders (purchases + top-ups) and
- * wallet ledger entries (deposits, refunds, adjustments) — one merged,
- * filterable, paginated timeline per user, matching the reference UI
+ * Unified "Transactions" feed over orders (eSIM purchases, eSIM top-ups,
+ * gift cards) and wallet ledger entries (deposits, refunds, adjustments) —
+ * one merged, filterable, paginated timeline per user, matching the reference UI
  * (date range / type / category / status filters, All/Completed/Pending/Failed tabs).
  *
  * `WalletTransactionType.PURCHASE` rows are deliberately excluded from the
@@ -60,17 +61,23 @@ export class TransactionsService {
           }
         : undefined;
 
-    const includeEsim =
-      !query.category || ESIM_CATEGORIES.includes(query.category);
+    const includeOrders =
+      !query.category || ORDER_CATEGORIES.includes(query.category);
     const includeWallet =
       !query.category || WALLET_CATEGORIES.includes(query.category);
 
     const [orders, wallet] = await Promise.all([
-      includeEsim
+      includeOrders
         ? this.prisma.order.findMany({
             where: { userId, ...(dateFilter ? { createdAt: dateFilter } : {}) },
             orderBy: { createdAt: 'desc' },
-            include: { product: true, topUpProduct: true, providerOrder: true },
+            include: {
+              product: true,
+              topUpProduct: true,
+              providerOrder: true,
+              giftCardDenomination: { include: { product: true } },
+              giftCardIssuance: true,
+            },
           })
         : Promise.resolve<OrderForFeed[]>([]),
       includeWallet

@@ -1,4 +1,7 @@
 import type {
+  GiftCardDenomination,
+  GiftCardIssuance,
+  GiftCardProduct,
   Order,
   Product,
   ProviderOrder,
@@ -18,6 +21,9 @@ export type OrderForFeed = Order & {
   product: Product | null;
   topUpProduct: TopUpProduct | null;
   providerOrder: ProviderOrder | null;
+  giftCardDenomination:
+    (GiftCardDenomination & { product: GiftCardProduct }) | null;
+  giftCardIssuance: GiftCardIssuance | null;
 };
 
 function normalizeOrderStatus(status: string): TransactionFeedStatus {
@@ -33,9 +39,41 @@ function normalizeWalletStatus(status: string): TransactionFeedStatus {
   return TransactionFeedStatus.PENDING;
 }
 
+function toGiftCardFeedItem(order: OrderForFeed): TransactionFeedItemDto {
+  const product = order.giftCardDenomination?.product ?? null;
+  const faceValue = order.giftCardDenomination?.faceValue;
+
+  return {
+    id: `order:${order.id}`,
+    category: TransactionCategory.GIFT_CARD_PURCHASE,
+    direction: TransactionDirection.DEBIT,
+    title: product?.name ?? 'Gift card',
+    subtitle: faceValue ? `${formatUsd(faceValue)} card` : null,
+    amount: order.amount.toString(),
+    amountDisplay: `-${formatUsd(order.amount)}`,
+    currency: order.currency,
+    status: normalizeOrderStatus(order.status),
+    rawStatus: order.status,
+    reference: order.id,
+    date: order.createdAt,
+    meta: {
+      orderId: order.id,
+      giftCardDenominationId: order.giftCardDenominationId,
+      // Lets the UI deep-link straight to the reveal action, without ever
+      // carrying the code itself through the feed.
+      codeAvailable: (order.giftCardIssuance?.cardCount ?? 0) > 0,
+      failureReason: order.failureReason,
+    },
+  };
+}
+
 export function toTransactionFeedItemFromOrder(
   order: OrderForFeed,
 ): TransactionFeedItemDto {
+  if (order.orderType === 'GIFT_CARD') {
+    return toGiftCardFeedItem(order);
+  }
+
   const isTopUp = order.orderType === 'TOPUP';
   const title = isTopUp
     ? (order.topUpProduct?.name ?? 'eSIM top-up')

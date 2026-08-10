@@ -12,9 +12,10 @@ import type { OrderType, WalletTransactionType } from '@prisma/client';
 export const DomainEvent = {
   WalletCredited: 'wallet.credited',
   OrderCompleted: 'order.completed',
-  /** Covers both PURCHASE and TOPUP orders — check `orderType` on the payload. */
+  /** Covers PURCHASE, TOPUP and GIFT_CARD orders — check `orderType` on the payload. */
   OrderFailed: 'order.failed',
   TopUpCompleted: 'topup.completed',
+  GiftCardIssued: 'giftcard.issued',
 } as const;
 
 export interface WalletCreditedPayload {
@@ -54,4 +55,19 @@ export interface TopUpCompletedPayload {
   amount: string;
   currency: string;
   iccid: string | null;
+}
+
+/**
+ * Deliberately carries no card number or PIN. Codes are bearer secrets and
+ * only ever leave the database through the authenticated reveal endpoint,
+ * so notifications and emails link to the app instead of embedding them.
+ */
+export interface GiftCardIssuedPayload {
+  orderId: string;
+  userId: string;
+  amount: string;
+  currency: string;
+  productName: string;
+  faceValue: string;
+  cardCount: number;
 }
